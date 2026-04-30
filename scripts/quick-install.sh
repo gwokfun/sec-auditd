@@ -170,7 +170,7 @@ else
 fi
 
 # 安装 pip3
-if [ -z "$SKIP_ALERT_ENGINE" ]; then
+if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
     if ! command -v pip3 &> /dev/null; then
         warn "pip3 未安装，正在安装..."
         case $PKG_MANAGER in
@@ -199,7 +199,7 @@ if [ -z "$SKIP_ALERT_ENGINE" ]; then
 fi
 
 # 安装 Python 依赖
-if [ -z "$SKIP_ALERT_ENGINE" ] && [ "$WITH_BINARY" = false ]; then
+if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$WITH_BINARY" = false ]; then
     info "正在安装 Python 依赖..."
     if [ -f "$REPO_DIR/requirements.txt" ]; then
         pip3 install -q -r "$REPO_DIR/requirements.txt" || {
@@ -267,7 +267,7 @@ info "✓ 日志轮转配置完成"
 
 # 步骤 5: 安装告警引擎
 step "[5/8] 安装告警引擎..."
-if [ -z "$SKIP_ALERT_ENGINE" ]; then
+if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
     cp -r "$REPO_DIR/alert-engine"/* "$INSTALL_DIR/alert-engine/"
 
     # 选择执行方式
@@ -314,7 +314,7 @@ info "✓ 脚本已安装到 $INSTALL_DIR/scripts/"
 
 # 步骤 7: 配置 cgroups 资源限制（可选）
 step "[7/8] 配置资源限制..."
-if [ "$MINIMAL_MODE" = false ] && [ -z "$SKIP_ALERT_ENGINE" ]; then
+if [ "$MINIMAL_MODE" = false ] && [ "$SKIP_ALERT_ENGINE" != "true" ]; then
     if [ -f "$INSTALL_DIR/scripts/setup-cgroups.sh" ]; then
         info "配置 cgroups 资源限制..."
         bash "$INSTALL_DIR/scripts/setup-cgroups.sh" || warn "cgroups 配置失败，继续安装"
@@ -338,7 +338,7 @@ RULE_COUNT=$(auditctl -l | wc -l)
 info "✓ auditd 服务已启动，已加载 $RULE_COUNT 条审计规则"
 
 # 启动告警引擎
-if [ -z "$SKIP_ALERT_ENGINE" ] && [ "$START_SERVICE" = true ]; then
+if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$START_SERVICE" = true ]; then
     if [ "$AUTO_MODE" = true ]; then
         info "自动启动告警引擎..."
         systemctl enable sec-auditd-alert
@@ -375,7 +375,7 @@ echo "  - 查看日志: ausearch -ts recent -i"
 echo "  - 检查状态: $INSTALL_DIR/scripts/check-audit.sh"
 echo ""
 
-if [ -z "$SKIP_ALERT_ENGINE" ]; then
+if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
     echo "告警引擎："
     echo "  - 查看状态: systemctl status sec-auditd-alert"
     echo "  - 查看日志: journalctl -u sec-auditd-alert -f"
@@ -387,7 +387,7 @@ echo "下一步建议："
 echo "  1. 根据实际需求调整规则: $INSTALL_DIR/audit.rules.d/"
 echo "  2. 自定义告警规则: $INSTALL_DIR/alert-engine/rules.d/"
 echo "  3. 测试规则配置: $INSTALL_DIR/scripts/test-rules.sh"
-if [ -z "$SKIP_ALERT_ENGINE" ]; then
+if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
     echo "  4. 配置日志采集（Filebeat/Fluentd 等）"
 fi
 echo ""

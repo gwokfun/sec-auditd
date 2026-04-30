@@ -111,3 +111,50 @@ rules:
     alert:
       message: "防火墙命令执行: {exe} by UID {uid}"
       throttle: 60
+
+  # 检测 Socket 创建（事件量大，默认关闭）
+  - id: network_socket_create
+    name: "Socket 创建"
+    enabled: false
+
+    severity: low
+
+    match:
+      key: "network_socket"
+
+    alert:
+      message: "进程 {process} (PID: {pid}) 创建 socket"
+      throttle: 600
+
+  # 检测入站连接接受
+  - id: network_accept_conn
+    name: "接受入站连接"
+    enabled: true
+    severity: low
+
+    match:
+      key: "network_accept"
+
+    # 白名单：常见的服务进程
+    whitelist:
+      - process: "sshd"
+      - process: "nginx"
+      - process: "apache2"
+      - process: "httpd"
+
+    alert:
+      message: "进程 {process} (PID: {pid}) 接受入站连接"
+      throttle: 600
+
+  # 检测进程开始监听端口
+  - id: network_listen_port
+    name: "进程开始监听端口"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "network_listen"
+
+    alert:
+      message: "进程 {process} (PID: {pid}) 开始监听端口"
+      throttle: 300

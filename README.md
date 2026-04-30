@@ -458,8 +458,8 @@ sudo systemctl status sec-auditd-alert
 # 查看告警引擎日志
 sudo journalctl -u sec-auditd-alert -f
 
-# 检查配置文件
-sudo python3 -m yaml /etc/sec-auditd/alert-engine/config.yaml
+# 检查配置文件语法
+sudo python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" /etc/sec-auditd/alert-engine/config.yaml
 
 # 手动运行测试
 sudo python3 /etc/sec-auditd/alert-engine/engine.py \
