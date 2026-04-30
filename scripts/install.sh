@@ -41,16 +41,31 @@ if ! command -v python3 &> /dev/null; then
     SKIP_ALERT_ENGINE=1
 else
     echo "✓ python3 已安装"
-    # 检查 PyYAML
-    if ! python3 -c "import yaml" &> /dev/null; then
-        echo "警告：PyYAML 未安装"
-        echo "正在安装 PyYAML..."
-        pip3 install pyyaml || {
-            echo "PyYAML 安装失败，告警引擎将无法使用"
+    # 检查 pip
+    if ! command -v pip3 &> /dev/null; then
+        echo "警告：pip3 未安装"
+        echo "正在尝试安装 pip3..."
+        python3 -m ensurepip --default-pip 2>/dev/null || {
+            echo "pip3 安装失败，告警引擎将无法使用"
             SKIP_ALERT_ENGINE=1
         }
-    else
-        echo "✓ PyYAML 已安装"
+    fi
+    # 安装依赖
+    if [ -z "$SKIP_ALERT_ENGINE" ]; then
+        echo "正在安装 Python 依赖..."
+        if [ -f "$REPO_DIR/requirements.txt" ]; then
+            pip3 install -r "$REPO_DIR/requirements.txt" || {
+                echo "依赖安装失败，告警引擎将无法使用"
+                SKIP_ALERT_ENGINE=1
+            }
+        else
+            # 手动安装核心依赖
+            pip3 install "PyYAML>=5.1,<7.0" "simpleeval>=0.9.13" || {
+                echo "依赖安装失败，告警引擎将无法使用"
+                SKIP_ALERT_ENGINE=1
+            }
+        fi
+        echo "✓ Python 依赖已安装"
     fi
 fi
 

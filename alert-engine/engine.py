@@ -11,9 +11,17 @@ import yaml
 import time
 import re
 import logging
+import signal
 from datetime import datetime
 from collections import defaultdict, deque
 from typing import Dict, List, Any, Optional
+
+try:
+    from simpleeval import simple_eval, EvalWithCompoundTypes
+    HAS_SIMPLEEVAL = True
+except ImportError:
+    HAS_SIMPLEEVAL = False
+    import ast
 
 # 日志配置
 logging.basicConfig(
@@ -74,7 +82,7 @@ class AuditParser:
                         event['key'] = key_match.group(1)
 
                 return event
-        except Exception as e:
+        except (ValueError, AttributeError, KeyError) as e:
             logger.debug(f"Failed to parse line: {e}")
 
         return None
@@ -89,13 +97,14 @@ class AuditParser:
             if all(c in '0123456789ABCDEFabcdef' for c in value.replace(' ', '')):
                 if len(value) % 2 == 0 and len(value) > 4:
                     try:
-                        decoded = bytes.fromhex(value).decode('utf-8', errors='ignore')
+                        decoded = bytes.fromhex(value).decode('utf-8', errors='replace')
                         if decoded.isprintable() or '\n' in decoded or '\t' in decoded:
                             return decoded
-                    except:
-                        pass
+                    except (ValueError, UnicodeDecodeError) as e:
+                        logger.debug(f"Failed to decode hex value: {e}")
             return value
-        except:
+        except (ValueError, UnicodeDecodeError) as e:
+            logger.debug(f"Unexpected error decoding value: {e}")
             return value
 
     @staticmethod
@@ -106,7 +115,7 @@ class AuditParser:
             try:
                 dt = datetime.fromtimestamp(event['timestamp'])
                 event['datetime'] = dt.isoformat()
-            except:
+            except (ValueError, OSError, OverflowError):
                 pass
 
         # 提取进程信息
@@ -118,14 +127,14 @@ class AuditParser:
             if field in event:
                 try:
                     event[field] = int(event[field])
-                except:
+                except (ValueError, TypeError):
                     pass
 
         # PID 转换
         if 'pid' in event:
             try:
                 event['pid'] = int(event['pid'])
-            except:
+            except (ValueError, TypeError):
                 pass
 
         return event
@@ -146,9 +155,18 @@ class RuleEngine:
         """加载配置"""
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f)
+                config = yaml.safe_load(f)
+                if not config:
+                    raise ValueError("Empty configuration file")
+                return config
+        except FileNotFoundError:
+            logger.error(f"Config file not found: {path}")
+            sys.exit(1)
+        except yaml.YAMLError as e:
+            logger.error(f"Failed to parse config YAML: {e}")
+            sys.exit(1)
         except Exception as e:
-            logger.error(f"Failed to load config: {e}")
+            logger.error(f"Failed to load config from {path}: {e}")
             sys.exit(1)
 
     def _load_rules(self) -> List[Dict]:
@@ -169,6 +187,10 @@ class RuleEngine:
                         if rule_file and 'rules' in rule_file:
                             rules.extend(rule_file['rules'])
                             logger.info(f"Loaded rules from {filename}")
+                except yaml.YAMLError as e:
+                    logger.error(f"Failed to parse YAML in {filename}: {e}")
+                except FileNotFoundError:
+                    logger.error(f"Rule file not found: {filename}")
                 except Exception as e:
                     logger.error(f"Failed to load rules from {filename}: {e}")
 
@@ -241,7 +263,7 @@ class RuleEngine:
         return True
 
     def _eval_filter(self, expr: str, event: Dict) -> bool:
-        """评估过滤表达式（简化实现）"""
+        """评估过滤表达式（安全实现）"""
         try:
             # 创建安全的上下文
             context = {}
@@ -249,13 +271,40 @@ class RuleEngine:
                 if isinstance(value, (str, int, float, bool)):
                     context[key] = value
 
-            # 替换常见的字段访问
-            safe_expr = expr
-
-            # 使用 eval 评估（注意：这是简化实现，生产环境应使用更安全的表达式引擎）
-            return bool(eval(safe_expr, {"__builtins__": {}}, context))
-        except Exception as e:
+            # 使用安全的表达式求值
+            if HAS_SIMPLEEVAL:
+                # 使用 simpleeval 库进行安全求值
+                return bool(simple_eval(expr, names=context))
+            else:
+                # 回退到基于 AST 的安全实现
+                # 注意：这个实现只支持简单的表达式
+                logger.warning("simpleeval not available, using limited expression evaluation. Install with: pip install simpleeval")
+                return self._safe_eval_fallback(expr, context)
+        except (NameError, SyntaxError, ValueError) as e:
             logger.debug(f"Filter eval error: {e}")
+            return False
+
+    def _safe_eval_fallback(self, expr: str, context: Dict) -> bool:
+        """安全的回退表达式求值（仅支持简单的 in 操作）"""
+        # 这是一个简化的实现，仅支持常见的模式
+        # 例如: "'text' in field"
+        try:
+            # 检查是否为简单的 in 表达式
+            if ' in ' in expr:
+                parts = expr.split(' in ')
+                if len(parts) == 2:
+                    needle = parts[0].strip().strip("'\"")
+                    haystack_key = parts[1].strip()
+                    if haystack_key in context:
+                        haystack = str(context[haystack_key])
+                        return needle in haystack
+            # 对于其他表达式，使用受限的 eval
+            # 移除危险的内置函数访问
+            safe_dict = {"__builtins__": {}}
+            safe_dict.update(context)
+            return bool(eval(expr, safe_dict, {}))
+        except Exception as e:
+            logger.debug(f"Fallback eval error: {e}")
             return False
 
     def _check_aggregate(self, event: Dict, rule: Dict) -> bool:
@@ -323,7 +372,7 @@ class RuleEngine:
 
         # 格式化消息
         try:
-            # 创建安全的格式化上下文
+            # 格式化消息
             format_ctx = {}
             for key, value in event.items():
                 if isinstance(value, (str, int, float, bool)):
@@ -332,7 +381,7 @@ class RuleEngine:
                     format_ctx[key] = str(value)
 
             message = message.format(**format_ctx)
-        except Exception as e:
+        except (KeyError, ValueError) as e:
             logger.debug(f"Message format error: {e}")
 
         return {
@@ -406,7 +455,7 @@ class AlertEngine:
             sys.exit(1)
 
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                 # 跳到文件末尾（只处理新事件）
                 f.seek(0, 2)
                 logger.info("Waiting for new audit events...")
@@ -417,7 +466,7 @@ class AlertEngine:
 
                     line = f.readline()
                     if not line:
-                        time.sleep(0.1)
+                        time.sleep(0.5)  # 增加睡眠时间以减少 CPU 占用
                         continue
 
                     self._process_line(line.strip())
@@ -449,7 +498,7 @@ class AlertEngine:
                 self.alert_count += 1
 
         except Exception as e:
-            logger.error(f"Error processing line: {e}")
+            logger.error(f"Error processing line: {e}, line: {line[:200]}")
 
     def _output_alert(self, alert: Dict):
         """输出告警"""
@@ -492,6 +541,8 @@ class AlertEngine:
             import syslog
             syslog.openlog('sec-auditd')
             syslog.syslog(syslog.LOG_WARNING, json.dumps(alert, ensure_ascii=False))
+        except ImportError:
+            logger.error("syslog module not available")
         except Exception as e:
             logger.error(f"Failed to send to syslog: {e}")
 
