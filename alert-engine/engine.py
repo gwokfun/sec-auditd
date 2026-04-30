@@ -385,7 +385,7 @@ class RuleEngine:
             logger.debug(f"Message format error: {e}")
 
         return {
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'timestamp': datetime.now(datetime.UTC).isoformat().replace('+00:00', 'Z') if hasattr(datetime, 'UTC') else datetime.utcnow().isoformat() + 'Z',
             'rule_id': rule['id'],
             'rule_name': rule['name'],
             'severity': rule.get('severity', 'medium'),
