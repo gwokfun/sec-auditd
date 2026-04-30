@@ -121,6 +121,11 @@ sudo ./scripts/quick-install.sh --auto
 
 # 或最小化安装
 sudo ./scripts/quick-install.sh --auto --minimal
+
+# 指定 Python 版本安装
+sudo ./scripts/quick-install.sh --auto --python-version 2.7  # Python 2.7
+sudo ./scripts/quick-install.sh --auto -p 3.5                # Python 3.5
+sudo ./scripts/quick-install.sh --auto -p 3.6                # Python 3.6
 ```
 
 **方式 2：在线安装（开发中）**
@@ -137,6 +142,7 @@ quick-install.sh 特性：
 - ✅ 自动检测并安装缺少的依赖（auditd, python3, pip）
 - ✅ 支持多种包管理器（apt, yum, dnf, zypper）
 - ✅ 自动配置 cgroups 资源限制（支持 v1/v2）
+- ✅ 支持 Python 版本选择（2.7, 3.5, 3.6, 3.x）
 - ✅ 一键启动所有服务
 - ✅ 支持命令行参数定制安装
 
@@ -152,7 +158,12 @@ cd sec-auditd
 2. **运行安装脚本**
 
 ```bash
+# 使用默认 Python 版本
 sudo ./scripts/install.sh
+
+# 或指定 Python 版本
+sudo ./scripts/install.sh --python-version 2.7  # Python 2.7
+sudo ./scripts/install.sh -p 3.6                # Python 3.6
 ```
 
 安装脚本会自动：
