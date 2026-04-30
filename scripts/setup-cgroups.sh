@@ -28,19 +28,27 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 检查 cgroups v2 是否挂载
+# 检查 cgroups 是否挂载
 if [ ! -d "/sys/fs/cgroup" ]; then
-    error "cgroups v2 未挂载"
+    error "cgroups 未挂载"
     exit 1
 fi
 
 info "检测 cgroups 版本..."
+CGROUP_VERSION=0
+
+# 检测 cgroups v2
 if [ -f "/sys/fs/cgroup/cgroup.controllers" ]; then
     info "检测到 cgroups v2"
     CGROUP_VERSION=2
+# 检测 cgroups v1
+elif [ -d "/sys/fs/cgroup/cpu" ] || [ -d "/sys/fs/cgroup/cpu,cpuacct" ]; then
+    info "检测到 cgroups v1"
+    CGROUP_VERSION=1
 else
-    error "仅支持 cgroups v2"
-    exit 1
+    warn "未检测到 cgroups 支持"
+    warn "将使用基本的进程优先级控制（Nice/IOWeight）"
+    CGROUP_VERSION=0
 fi
 
 # 获取系统资源信息
@@ -78,10 +86,14 @@ mkdir -p "$SYSTEMD_DIR"
 
 # 创建 cgroups 资源限制配置
 info "创建 systemd service drop-in 配置..."
-cat > "${SYSTEMD_DIR}/resource-limits.conf" <<EOF
+
+if [ $CGROUP_VERSION -eq 2 ]; then
+    # cgroups v2 配置
+    cat > "${SYSTEMD_DIR}/resource-limits.conf" <<EOF
 # SEC-AUDITD Alert Engine Resource Limits
 # 自动生成 - 请勿手动修改
 # 生成时间: $(date)
+# cgroups 版本: v2
 
 [Service]
 # CPU 限制: ~5% 的一个 CPU 核心
@@ -104,6 +116,56 @@ Nice=10
 OOMScoreAdjust=100
 EOF
 
+elif [ $CGROUP_VERSION -eq 1 ]; then
+    # cgroups v1 配置（使用兼容的 systemd 指令）
+    cat > "${SYSTEMD_DIR}/resource-limits.conf" <<EOF
+# SEC-AUDITD Alert Engine Resource Limits
+# 自动生成 - 请勿手动修改
+# 生成时间: $(date)
+# cgroups 版本: v1
+
+[Service]
+# CPU 限制: ~5% 的一个 CPU 核心
+CPUQuota=5%
+
+# 内存限制: ${MEM_LIMIT_MB}MB (~5% 系统内存)
+# 注意: cgroups v1 使用 MemoryLimit 而不是 MemoryMax
+MemoryLimit=${MEM_LIMIT_BYTES}
+
+# 任务数限制 (防止 fork bomb)
+TasksMax=50
+
+# Nice 值 (较低优先级)
+Nice=10
+
+# OOM 分数调整 (优先被 OOM killer 杀死)
+OOMScoreAdjust=100
+EOF
+
+else
+    # 不支持 cgroups，仅使用基本的进程控制
+    cat > "${SYSTEMD_DIR}/resource-limits.conf" <<EOF
+# SEC-AUDITD Alert Engine Resource Limits
+# 自动生成 - 请勿手动修改
+# 生成时间: $(date)
+# cgroups 版本: 不支持（使用基本进程控制）
+
+[Service]
+# 任务数限制 (防止 fork bomb)
+TasksMax=50
+
+# Nice 值 (较低优先级)
+Nice=10
+
+# OOM 分数调整 (优先被 OOM killer 杀死)
+OOMScoreAdjust=100
+
+# 注意: 由于系统不支持 cgroups，CPU 和内存限制将不生效
+# 建议升级到支持 cgroups 的内核版本
+EOF
+    warn "系统不支持 cgroups，仅应用基本的进程优先级控制"
+fi
+
 info "资源限制配置已创建: ${SYSTEMD_DIR}/resource-limits.conf"
 
 # 重新加载 systemd 配置
@@ -120,7 +182,18 @@ info ""
 info "启用资源限制:"
 info "  sudo systemctl restart sec-auditd-alert"
 info ""
-info "查看资源使用情况:"
-info "  systemctl status sec-auditd-alert"
-info "  cat /sys/fs/cgroup/system.slice/sec-auditd-alert.service/memory.current"
-info "  cat /sys/fs/cgroup/system.slice/sec-auditd-alert.service/cpu.stat"
+if [ $CGROUP_VERSION -eq 2 ]; then
+    info "查看资源使用情况 (cgroups v2):"
+    info "  systemctl status sec-auditd-alert"
+    info "  cat /sys/fs/cgroup/system.slice/sec-auditd-alert.service/memory.current"
+    info "  cat /sys/fs/cgroup/system.slice/sec-auditd-alert.service/cpu.stat"
+elif [ $CGROUP_VERSION -eq 1 ]; then
+    info "查看资源使用情况 (cgroups v1):"
+    info "  systemctl status sec-auditd-alert"
+    info "  cat /sys/fs/cgroup/memory/system.slice/sec-auditd-alert.service/memory.usage_in_bytes"
+    info "  cat /sys/fs/cgroup/cpu,cpuacct/system.slice/sec-auditd-alert.service/cpuacct.usage"
+else
+    info "查看进程状态:"
+    info "  systemctl status sec-auditd-alert"
+    info "  ps aux | grep engine.py"
+fi
