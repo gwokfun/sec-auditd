@@ -206,6 +206,13 @@ class RuleEngine:
             self.last_reload = now
             self._clean_alert_cache()
 
+    def reload_rules(self):
+        """立即重新加载规则并清理过期限流缓存（可由信号处理器等外部触发器调用）"""
+        logger.info("Reloading rules...")
+        self.rules = self._load_rules()
+        self.last_reload = time.time()
+        self._clean_alert_cache()
+
     def _clean_alert_cache(self):
         """清理过期的限流缓存，防止内存无限增长"""
         max_throttle = max(
@@ -293,14 +300,30 @@ class RuleEngine:
                 return bool(simple_eval(expr, names=context))
             else:
                 # 回退到基于 AST 的安全实现
-                logger.warning("simpleeval not available, using limited expression evaluation. Install with: pip install simpleeval")
+                logger.warning(
+                    "simpleeval not available, using limited AST-based expression evaluation. "
+                    "Supported: comparisons (==, !=, <, <=, >, >=), in/not in, and/or/not. "
+                    "For full expression support, install: pip install simpleeval"
+                )
                 return self._safe_eval_fallback(expr, context)
         except (NameError, SyntaxError, ValueError) as e:
             logger.debug(f"Filter eval error: {e}")
             return False
 
     def _safe_eval_fallback(self, expr: str, context: Dict) -> bool:
-        """安全的回退表达式求值 - 基于 AST 解析，不使用 eval()"""
+        """安全的回退表达式求值 - 基于 AST 解析，不使用 eval()。
+
+        支持的表达式类型：
+        - 字面量：字符串、数字、布尔值
+        - 变量名：从事件上下文中查找
+        - 比较：==, !=, <, <=, >, >=
+        - 成员测试：in, not in
+        - 布尔组合：and, or, not
+        - 链式比较：1 < x < 10
+
+        不支持函数调用、属性访问或任意 Python 表达式。
+        如需完整表达式支持，请安装 simpleeval：pip install simpleeval
+        """
         try:
             tree = ast.parse(expr, mode='eval')
             return bool(self._eval_ast_node(tree.body, context))
@@ -511,8 +534,7 @@ class AlertEngine:
     def _handle_sighup(self, signum: int, frame: Any) -> None:
         """处理 SIGHUP 信号（重新加载规则）"""
         logger.info("Received SIGHUP, reloading rules...")
-        self.rule_engine.rules = self.rule_engine._load_rules()
-        self.rule_engine.last_reload = time.time()
+        self.rule_engine.reload_rules()
 
     def run(self):
         """运行引擎"""

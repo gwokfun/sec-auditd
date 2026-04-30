@@ -337,6 +337,7 @@ rules:
         # 第三次应该触发
         result3 = engine._check_aggregate(event, rule)
         self.assertIsNotNone(result3)
+        self.assertIn('count', result3)
         self.assertEqual(result3['count'], 3)
 
     def test_check_aggregate_with_unique(self):
@@ -377,6 +378,7 @@ rules:
 
         result3 = engine._check_aggregate(event3, rule)
         self.assertIsNotNone(result3)
+        self.assertIn('unique_count', result3)
         self.assertEqual(result3['unique_count'], 3)
 
     def test_in_whitelist_partial_match(self):
