@@ -1,0 +1,15 @@
+# SEC-AUDITD Requirements
+
+## 生产环境依赖
+PyYAML>=5.1,<7.0
+simpleeval>=0.9.13
+
+## 开发环境依赖（可选）
+# 运行测试
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# 代码质量
+black>=22.0.0
+flake8>=5.0.0
+mypy>=0.990
