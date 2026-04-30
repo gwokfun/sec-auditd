@@ -7,13 +7,11 @@ import unittest
 import sys
 import os
 import tempfile
-import json
-from datetime import datetime
 
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'alert-engine'))
 
-from engine import AuditParser, RuleEngine, AlertEngine
+from engine import AuditParser, RuleEngine  # noqa: E402, F401
 
 
 class TestAuditParser(unittest.TestCase):

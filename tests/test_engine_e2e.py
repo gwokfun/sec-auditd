@@ -161,7 +161,10 @@ class TestDefaultEngineE2E(TestEngineE2E):
             time.sleep(2)
 
             # 写入测试事件
-            test_event = 'type=EXECVE msg=audit(1234567890.123:456): argc=2 a0="/tmp/test" exe="/tmp/test" key="process_exec"'
+            test_event = (
+                'type=EXECVE msg=audit(1234567890.123:456): argc=2 '
+                'a0="/tmp/test" exe="/tmp/test" key="process_exec"'
+            )
             self._append_audit_log(test_event)
 
             # 等待告警生成
@@ -282,8 +285,10 @@ class TestLaunchScriptE2E(TestEngineE2E):
         # 验证所有版本的引擎文件都存在
         for version_dir in ['py27', 'py35', 'py36']:
             engine_path = ALERT_ENGINE_DIR / version_dir / 'engine.py'
-            self.assertTrue(engine_path.exists(),
-                          f"版本 {version_dir} 的引擎文件应该存在")
+            self.assertTrue(
+                engine_path.exists(),
+                f"版本 {version_dir} 的引擎文件应该存在"
+            )
 
     def test_launch_script_invalid_version(self):
         """测试无效的版本参数"""
@@ -355,8 +360,10 @@ class TestMultiVersionCompatibility(TestEngineE2E):
 
                     # 验证告警
                     alerts = self._read_alerts()
-                    self.assertGreater(len(alerts), 0,
-                                     f"版本 {version_name} 应该生成告警")
+                    self.assertGreater(
+                        len(alerts), 0,
+                        f"版本 {version_name} 应该生成告警"
+                    )
 
                     alert = alerts[0]
                     self.assertEqual(alert['rule_id'], 'test_process_exec')
@@ -393,8 +400,10 @@ class TestSignalHandling(TestEngineE2E):
             returncode = proc.wait(timeout=5)
 
             # 验证优雅退出（返回码应该是负信号值或 0）
-            self.assertIn(returncode, [0, -15, 143],
-                         "进程应该优雅退出")
+            self.assertIn(
+                returncode, [0, -15, 143],
+                "进程应该优雅退出"
+            )
 
         except subprocess.TimeoutExpired:
             proc.kill()
@@ -579,7 +588,10 @@ rules:
             time.sleep(2)
 
             # 写入白名单中的进程事件
-            whitelisted_event = 'type=EXECVE msg=audit(1234567890.123:100): exe="/usr/bin/safe_process" key="process_exec"'
+            whitelisted_event = (
+                'type=EXECVE msg=audit(1234567890.123:100): '
+                'exe="/usr/bin/safe_process" key="process_exec"'
+            )
             self._append_audit_log(whitelisted_event)
             time.sleep(2)
 
@@ -609,7 +621,10 @@ rules:
             time.sleep(2)
 
             # 写入非白名单进程事件
-            suspicious_event = 'type=EXECVE msg=audit(1234567890.123:200): exe="/tmp/suspicious_proc" key="process_exec"'
+            suspicious_event = (
+                'type=EXECVE msg=audit(1234567890.123:200): '
+                'exe="/tmp/suspicious_proc" key="process_exec"'
+            )
             self._append_audit_log(suspicious_event)
             self._wait_for_alerts(timeout=5)
 

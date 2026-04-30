@@ -75,4 +75,4 @@ jobs:
 
       - name: Run flake8
         run: |
-          flake8 alert-engine/engine.py tests/ --max-line-length=120 --extend-ignore=E203,W503
+          flake8 alert-engine/engine.py tests/ --max-line-length=120 --extend-ignore=E203,W503,W504

@@ -8,16 +8,13 @@ import unittest
 import sys
 import os
 import tempfile
-import json
 import time
-import yaml
-from unittest.mock import patch, mock_open, MagicMock
-from datetime import datetime
+from unittest.mock import patch
 
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'alert-engine'))
 
-from engine import AuditParser, RuleEngine, AlertEngine
+from engine import AuditParser, RuleEngine, AlertEngine  # noqa: E402
 
 
 class TestAuditParserExtended(unittest.TestCase):
@@ -176,7 +173,7 @@ engine:
 
     def test_load_rules_nonexistent_dir(self):
         """测试规则目录不存在"""
-        config_content = f"""
+        config_content = """
 engine:
   input:
     type: file
@@ -217,7 +214,8 @@ engine:
         with open(self.config_file, 'w') as f:
             f.write(config_content)
 
-        engine = RuleEngine(self.config_file)
+        # Load the config file, should handle missing rules directory gracefully
+        RuleEngine(self.config_file)
         # 应该跳过无效规则
 
     def test_match_rule_with_list_keys(self):

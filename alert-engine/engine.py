@@ -18,7 +18,7 @@ from collections import defaultdict, deque
 from typing import Dict, List, Any, Optional
 
 try:
-    from simpleeval import simple_eval, EvalWithCompoundTypes
+    from simpleeval import simple_eval
     HAS_SIMPLEEVAL = True
 except ImportError:
     HAS_SIMPLEEVAL = False
@@ -406,7 +406,7 @@ class RuleEngine:
         # 清理过期事件
         cutoff = now - window
         while (self.state[rule_id][group_key] and
-               self.state[rule_id][group_key][0][0] < cutoff):
+                self.state[rule_id][group_key][0][0] < cutoff):
             self.state[rule_id][group_key].popleft()
 
         # 检查阈值
@@ -582,7 +582,9 @@ class AlertEngine:
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
         finally:
-            logger.info(f"Alert engine stopped. Processed {self.event_count} events, generated {self.alert_count} alerts")
+            logger.info(
+                f"Alert engine stopped. Processed {self.event_count} events, "
+                f"generated {self.alert_count} alerts")
 
     def _process_line(self, line: str):
         """处理单行日志"""
@@ -661,7 +663,7 @@ def main():
     """主函数"""
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <config.yaml>")
-        print(f"\nExample:")
+        print("\nExample:")
         print(f"  {sys.argv[0]} /etc/sec-auditd/alert-engine/config.yaml")
         sys.exit(1)
 
