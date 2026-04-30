@@ -1,0 +1,113 @@
+# 网络相关告警规则
+rules:
+  # 检测可疑的网络连接
+  - id: suspicious_network_connect
+    name: "可疑的网络连接"
+    enabled: true
+    severity: medium
+
+    # 匹配条件
+    match:
+      key: "network_connect"
+
+    # 白名单进程
+    whitelist:
+      - process: "apt"
+      - process: "apt-get"
+      - process: "yum"
+      - process: "dnf"
+      - process: "curl"
+      - process: "wget"
+      - process: "python"
+      - process: "python3"
+
+    # 告警配置
+    alert:
+      message: "检测到进程 {process} (PID: {pid}) 建立网络连接"
+      throttle: 300  # 5分钟内相同告警只发一次
+
+  # 检测从临时目录发起的网络连接
+  - id: network_from_tmp
+    name: "临时目录进程发起网络连接"
+    enabled: true
+    severity: high
+
+    match:
+      key: "network_connect"
+      filters:
+        - "'/tmp' in exe or '/dev/shm' in exe or '/var/tmp' in exe"
+
+    alert:
+      message: "警告：临时目录下的进程 {exe} (PID: {pid}) 发起网络连接"
+      throttle: 300
+
+  # 检测监听端口
+  - id: new_listening_port
+    name: "新增监听端口"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "network_bind"
+
+    alert:
+      message: "进程 {process} (PID: {pid}) 监听新端口"
+      throttle: 600
+
+  # 检测高频网络连接（需要聚合）
+  - id: connection_burst
+    name: "短时间大量网络连接"
+    enabled: true
+    severity: high
+
+    # 聚合配置
+    aggregate:
+      window: 60  # 60秒窗口
+      group_by: ["process", "uid"]
+      count: 100  # 超过100次连接
+
+    match:
+      key: "network_connect"
+
+    alert:
+      message: "进程 {process} (UID: {uid}) 在60秒内建立了 {count} 个连接"
+      throttle: 300
+
+  # 检测网络配置变更
+  - id: network_config_change
+    name: "网络配置文件变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "network_config"
+
+    alert:
+      message: "网络配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测防火墙配置变更
+  - id: firewall_config_change
+    name: "防火墙配置变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "firewall_config"
+
+    alert:
+      message: "防火墙配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测防火墙命令执行
+  - id: firewall_exec
+    name: "防火墙规则变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "firewall_exec"
+
+    alert:
+      message: "防火墙命令执行: {exe} by UID {uid}"
+      throttle: 60

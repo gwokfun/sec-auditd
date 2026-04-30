@@ -1,0 +1,56 @@
+# SEC-AUDITD Systemd 服务配置示例
+# 告警引擎服务单元文件
+
+[Unit]
+Description=SEC-AUDITD Alert Engine
+Documentation=https://github.com/gwokfun/sec-auditd
+After=auditd.service network.target
+Requires=auditd.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# 工作目录
+WorkingDirectory=/etc/sec-auditd/alert-engine
+
+# 启动命令
+ExecStart=/usr/bin/python3 /etc/sec-auditd/alert-engine/engine.py /etc/sec-auditd/alert-engine/config.yaml
+
+# 启动前检查
+ExecStartPre=/usr/bin/test -f /etc/sec-auditd/alert-engine/config.yaml
+ExecStartPre=/usr/bin/test -f /etc/sec-auditd/alert-engine/engine.py
+
+# 重启策略
+Restart=always
+RestartSec=5
+
+# 资源限制
+# 限制内存使用（可选）
+# MemoryLimit=512M
+
+# 限制 CPU 使用（可选）
+# CPUQuota=50%
+
+# 日志配置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sec-auditd-alert
+
+# 安全配置
+# 私有临时目录
+PrivateTmp=true
+
+# 只读根文件系统（需要确保日志目录可写）
+# ReadOnlyDirectories=/
+# ReadWriteDirectories=/var/log/sec-auditd
+
+# 进程管理
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
