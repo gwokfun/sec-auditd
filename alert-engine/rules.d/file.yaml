@@ -1,0 +1,157 @@
+# 文件相关告警规则
+rules:
+  # 检测密码文件变更
+  - id: passwd_changes
+    name: "密码文件变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "passwd_changes"
+
+    alert:
+      message: "警告：/etc/passwd 被修改 by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 shadow 文件变更
+  - id: shadow_changes
+    name: "Shadow 文件变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "shadow_changes"
+
+    alert:
+      message: "警告：/etc/shadow 被访问或修改 by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测组文件变更
+  - id: group_changes
+    name: "组文件变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "group_changes"
+
+    alert:
+      message: "/etc/group 被修改 by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 SSH 配置变更
+  - id: sshd_config_change
+    name: "SSH 配置变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "sshd_config"
+
+    alert:
+      message: "SSH 配置被修改 by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 root SSH 密钥变更
+  - id: root_ssh_keys_change
+    name: "Root SSH 密钥变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "root_ssh_keys"
+
+    alert:
+      message: "警告：Root SSH 密钥被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 sudoers 配置变更
+  - id: sudoers_change
+    name: "Sudoers 配置变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "sudoers_changes"
+
+    alert:
+      message: "警告：Sudoers 配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 systemd 配置变更
+  - id: systemd_change
+    name: "Systemd 配置变更"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "systemd_changes"
+
+    alert:
+      message: "Systemd 配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 300
+
+  # 检测定时任务变更
+  - id: cron_change
+    name: "定时任务变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "cron_changes"
+
+    alert:
+      message: "定时任务被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 PAM 配置变更
+  - id: pam_change
+    name: "PAM 配置变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "pam_changes"
+
+    alert:
+      message: "PAM 配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测系统库变更
+  - id: system_lib_change
+    name: "系统库文件变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "system_lib_changes"
+
+    alert:
+      message: "警告：系统库被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测系统二进制文件变更
+  - id: system_bin_change
+    name: "系统二进制文件变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: ["bin_changes", "sbin_changes", "usr_bin_changes", "usr_sbin_changes"]
+
+    alert:
+      message: "警告：系统二进制文件被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测审计配置变更
+  - id: audit_config_change
+    name: "审计配置变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "audit_config"
+
+    alert:
+      message: "警告：审计配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60

@@ -1,0 +1,40 @@
+# ============================================
+# 网络连接监控规则
+# ============================================
+
+# 监控 socket 创建
+-a always,exit -F arch=b64 -S socket -k network_socket
+-a always,exit -F arch=b32 -S socket -k network_socket
+
+# 监控 connect 系统调用（出站连接）
+-a always,exit -F arch=b64 -S connect -k network_connect
+-a always,exit -F arch=b32 -S connect -k network_connect
+
+# 监控 bind 系统调用（监听端口）
+-a always,exit -F arch=b64 -S bind -k network_bind
+-a always,exit -F arch=b32 -S bind -k network_bind
+
+# 监控 accept 系统调用（接受连接）
+-a always,exit -F arch=b64 -S accept -S accept4 -k network_accept
+-a always,exit -F arch=b32 -S accept -k network_accept
+
+# 监控 listen 系统调用
+-a always,exit -F arch=b64 -S listen -k network_listen
+-a always,exit -F arch=b32 -S listen -k network_listen
+
+# 监控网络配置变更
+-w /etc/hosts -p wa -k network_config
+-w /etc/hostname -p wa -k network_config
+-w /etc/resolv.conf -p wa -k network_config
+-w /etc/network/ -p wa -k network_config
+-w /etc/sysconfig/network -p wa -k network_config
+-w /etc/sysconfig/network-scripts/ -p wa -k network_config
+-w /etc/NetworkManager/ -p wa -k network_config
+
+# 监控防火墙配置变更
+-w /etc/firewalld/ -p wa -k firewall_config
+-w /etc/iptables/ -p wa -k firewall_config
+-w /etc/ufw/ -p wa -k firewall_config
+-w /sbin/iptables -p x -k firewall_exec
+-w /sbin/ip6tables -p x -k firewall_exec
+-w /usr/sbin/ufw -p x -k firewall_exec

@@ -1,0 +1,145 @@
+# 进程相关告警规则
+rules:
+  # 检测临时目录下的可疑执行
+  - id: suspicious_exec_tmp
+    name: "临时目录可疑执行"
+    enabled: true
+    severity: high
+
+    match:
+      key: "suspicious_exec_tmp"
+
+    alert:
+      message: "警告：在 /tmp 目录下执行了程序: {exe} (PID: {pid}, UID: {uid})"
+      throttle: 300
+
+  # 检测 /dev/shm 目录下的可疑执行
+  - id: suspicious_exec_shm
+    name: "共享内存目录可疑执行"
+    enabled: true
+    severity: high
+
+    match:
+      key: "suspicious_exec_shm"
+
+    alert:
+      message: "警告：在 /dev/shm 目录下执行了程序: {exe} (PID: {pid}, UID: {uid})"
+      throttle: 300
+
+  # 检测 /var/tmp 目录下的可疑执行
+  - id: suspicious_exec_vartmp
+    name: "/var/tmp 目录可疑执行"
+    enabled: true
+    severity: high
+
+    match:
+      key: "suspicious_exec_vartmp"
+
+    alert:
+      message: "警告：在 /var/tmp 目录下执行了程序: {exe} (PID: {pid}, UID: {uid})"
+      throttle: 300
+
+  # 检测提权操作
+  - id: privilege_escalation
+    name: "特权提升操作"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "privilege_escalation"
+
+    # 白名单进程
+    whitelist:
+      - process: "sudo"
+      - process: "su"
+      - process: "pkexec"
+      - process: "systemd"
+      - process: "login"
+      - process: "sshd"
+
+    alert:
+      message: "检测到特权提升: {process} (PID: {pid}) 执行了 setuid/setgid 操作"
+      throttle: 300
+
+  # 检测 sudo 使用
+  - id: sudo_usage
+    name: "Sudo 命令使用"
+    enabled: true
+    severity: low
+
+    match:
+      key: "sudo_usage"
+
+    alert:
+      message: "Sudo 被执行: UID {uid}"
+      throttle: 600
+
+  # 检测 su 使用
+  - id: su_usage
+    name: "Su 命令使用"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "su_usage"
+
+    alert:
+      message: "Su 被执行: UID {uid}"
+      throttle: 600
+
+  # 检测 Shell 执行（高频，建议按需启用）
+  - id: shell_exec
+    name: "Shell 执行"
+    enabled: false  # 默认关闭，事件量大
+    severity: low
+
+    match:
+      key: "shell_exec"
+
+    alert:
+      message: "Shell 被执行: {exe} by UID {uid}"
+      throttle: 600
+
+  # 检测高频进程执行（可能的暴力破解或扫描）
+  - id: process_burst
+    name: "短时间大量进程执行"
+    enabled: true
+    severity: high
+
+    aggregate:
+      window: 60  # 60秒窗口
+      group_by: ["uid"]
+      count: 50  # 超过50次执行
+
+    match:
+      key: "process_exec"
+
+    alert:
+      message: "UID {uid} 在60秒内执行了 {count} 次进程"
+      throttle: 300
+
+  # 检测内核模块加载
+  - id: kernel_module_load
+    name: "内核模块加载"
+    enabled: true
+    severity: high
+
+    match:
+      key: "kernel_modules"
+
+    alert:
+      message: "内核模块操作: {syscall} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测模块插入工具执行
+  - id: module_insertion
+    name: "模块插入工具执行"
+    enabled: true
+    severity: high
+
+    match:
+      key: "module_insertion"
+
+    alert:
+      message: "模块插入工具执行: {exe} by UID {uid}"
+      throttle: 60

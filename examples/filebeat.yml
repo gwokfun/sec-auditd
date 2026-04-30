@@ -1,0 +1,120 @@
+# Filebeat 配置示例
+# 用于采集 sec-auditd 的审计日志和告警日志
+
+filebeat.inputs:
+  # Auditd 审计日志
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/audit/audit.log
+
+    # 添加字段标识
+    fields:
+      log_type: auditd
+      source: sec-auditd
+      host: "${HOSTNAME}"
+    fields_under_root: true
+
+    # 多行合并（auditd 某些事件会跨多行）
+    multiline.type: pattern
+    multiline.pattern: '^type='
+    multiline.negate: true
+    multiline.match: after
+
+    # 排除某些事件类型（可选）
+    # exclude_lines: ['type=CRED_', 'type=USER_']
+
+  # SEC-AUDITD 告警日志
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/sec-auditd/alert.log
+
+    fields:
+      log_type: alert
+      source: sec-auditd
+      host: "${HOSTNAME}"
+    fields_under_root: true
+
+    # 解析 JSON 格式
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.overwrite_keys: true
+
+# 处理器配置
+processors:
+  # 添加主机信息
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+
+  # 添加云环境元数据（如果在云上）
+  - add_cloud_metadata: ~
+
+  # 添加 Docker 容器元数据（如果使用容器）
+  - add_docker_metadata: ~
+
+  # 删除不需要的字段
+  - drop_fields:
+      fields: ["agent.ephemeral_id", "agent.id", "ecs.version"]
+      ignore_missing: true
+
+# 输出到 Elasticsearch
+output.elasticsearch:
+  # Elasticsearch 集群地址
+  hosts: ["localhost:9200"]
+
+  # 认证信息（如果需要）
+  # username: "elastic"
+  # password: "changeme"
+
+  # 索引配置
+  indices:
+    - index: "sec-auditd-audit-%{+yyyy.MM.dd}"
+      when.equals:
+        log_type: "auditd"
+
+    - index: "sec-auditd-alert-%{+yyyy.MM.dd}"
+      when.equals:
+        log_type: "alert"
+
+  # 索引生命周期管理
+  ilm.enabled: true
+  ilm.rollover_alias: "sec-auditd"
+  ilm.pattern: "{now/d}-000001"
+
+# 或者输出到 Logstash
+# output.logstash:
+#   hosts: ["logstash:5044"]
+#
+#   # 负载均衡
+#   loadbalance: true
+#
+#   # 压缩传输
+#   compression_level: 3
+
+# 或者输出到 Kafka
+# output.kafka:
+#   hosts: ["kafka1:9092", "kafka2:9092"]
+#   topic: "sec-auditd"
+#   partition.round_robin:
+#     reachable_only: false
+#   compression: gzip
+#   max_message_bytes: 1000000
+
+# 日志配置
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+
+# 监控配置
+monitoring.enabled: false
+
+# 队列配置（提升性能）
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 5s

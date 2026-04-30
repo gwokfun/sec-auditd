@@ -1,0 +1,35 @@
+# 告警引擎配置文件
+engine:
+  # 输入源配置
+  input:
+    # 输入类型: audisp (实时) 或 file (离线)
+    type: file
+
+    # 文件模式：读取日志文件
+    file: /var/log/audit/audit.log
+
+    # 实时模式：通过 af_unix socket (需要配置 audisp 插件)
+    # socket: /var/run/sec-auditd.sock
+
+  # 输出配置
+  output:
+    # 告警日志文件
+    - type: file
+      path: /var/log/sec-auditd/alert.log
+      format: json
+
+    # Syslog 输出（可选）
+    - type: syslog
+      enabled: false
+      facility: local0
+      severity: warning
+
+  # 性能配置
+  performance:
+    buffer_size: 1000
+    worker_threads: 2
+
+  # 规则配置
+  rules:
+    dir: /etc/sec-auditd/alert-engine/rules.d/
+    reload_interval: 60  # 60秒检查规则更新

@@ -1,0 +1,14 @@
+# ============================================
+# 最终规则和审计保护
+# ============================================
+
+# 监控审计系统自身
+-w /var/log/audit/ -p wa -k audit_log
+-w /etc/audit/ -p wa -k audit_config
+-w /etc/audisp/ -p wa -k audisp_config
+-w /sbin/auditctl -p x -k audit_tools
+-w /sbin/auditd -p x -k audit_tools
+
+# 使审计配置不可修改（需要重启才能修改）
+# 生产环境建议开启，开发环境建议注释
+# -e 2

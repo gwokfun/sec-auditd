@@ -1,0 +1,29 @@
+# ============================================
+# 进程执行监控规则
+# ============================================
+
+# 监控所有进程执行（64位）
+-a always,exit -F arch=b64 -S execve -k process_exec
+
+# 监控所有进程执行（32位，如果系统支持）
+-a always,exit -F arch=b32 -S execve -k process_exec
+
+# 监控特定目录下的执行（可疑目录）
+-a always,exit -F arch=b64 -S execve -F dir=/tmp -k suspicious_exec_tmp
+-a always,exit -F arch=b64 -S execve -F dir=/dev/shm -k suspicious_exec_shm
+-a always,exit -F arch=b64 -S execve -F dir=/var/tmp -k suspicious_exec_vartmp
+
+# 监控提权操作
+-a always,exit -F arch=b64 -S setuid -S setreuid -S setresuid -k privilege_escalation
+-a always,exit -F arch=b64 -S setgid -S setregid -S setresgid -k privilege_escalation
+
+# 监控 sudo/su 使用
+-w /usr/bin/sudo -p x -k sudo_usage
+-w /usr/bin/su -p x -k su_usage
+-w /bin/su -p x -k su_usage
+
+# 监控 shell 执行
+-w /bin/bash -p x -k shell_exec
+-w /bin/sh -p x -k shell_exec
+-w /bin/dash -p x -k shell_exec
+-w /bin/zsh -p x -k shell_exec
