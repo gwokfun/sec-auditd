@@ -48,7 +48,8 @@ class TestAuditParserExtended(unittest.TestCase):
         """测试解析异常处理"""
         line = 'type='  # 不完整的行
         event = AuditParser.parse_line(line)
-        # 应该返回 None 或处理异常
+        # 不完整的行不应抛出异常，应返回 None 或空 dict
+        self.assertIsInstance(event, (type(None), dict))
 
     def test_decode_audit_value_empty(self):
         """测试解码空值"""
@@ -75,16 +76,20 @@ class TestAuditParserExtended(unittest.TestCase):
 
     def test_decode_audit_value_non_printable(self):
         """测试解码非打印字符"""
-        # 十六进制 00 01 02 03
+        # 十六进制 00 01 02 03（非打印字符）
         non_printable_hex = "00010203"
         result = AuditParser.decode_audit_value(non_printable_hex)
-        # 应该返回原值或处理后的值
+        # 非打印字符不应被解码，应返回原始十六进制字符串
+        self.assertEqual(result, non_printable_hex)
 
     def test_enrich_event_invalid_timestamp(self):
         """测试无效时间戳的事件丰富"""
-        event = {'timestamp': 999999999999999}  # 无效的时间戳
+        event = {'timestamp': 999999999999999}  # 无效的时间戳（超出 datetime 范围）
         enriched = AuditParser.enrich_event(event)
-        # 不应该有 datetime 字段或应该处理异常
+        # 无效时间戳不应导致崩溃，结果应为字典
+        self.assertIsInstance(enriched, dict)
+        # 无效时间戳不应添加 datetime 字段
+        self.assertNotIn('datetime', enriched)
 
     def test_enrich_event_invalid_uid(self):
         """测试无效 UID 的事件丰富"""
@@ -323,16 +328,17 @@ rules:
 
         # 第一次不应该触发
         result1 = engine._check_aggregate(event, rule)
-        self.assertFalse(result1)
+        self.assertIsNone(result1)
 
         # 第二次不应该触发
         result2 = engine._check_aggregate(event, rule)
-        self.assertFalse(result2)
+        self.assertIsNone(result2)
 
         # 第三次应该触发
         result3 = engine._check_aggregate(event, rule)
-        self.assertTrue(result3)
-        self.assertEqual(event['count'], 3)
+        self.assertIsNotNone(result3)
+        self.assertIn('count', result3)
+        self.assertEqual(result3['count'], 3)
 
     def test_check_aggregate_with_unique(self):
         """测试带唯一值的聚合"""
@@ -365,14 +371,15 @@ rules:
         event3 = {'key': 'test_key', 'uid': 1000, 'exe': '/bin/grep'}
 
         result1 = engine._check_aggregate(event1, rule)
-        self.assertFalse(result1)
+        self.assertIsNone(result1)
 
         result2 = engine._check_aggregate(event2, rule)
-        self.assertFalse(result2)
+        self.assertIsNone(result2)
 
         result3 = engine._check_aggregate(event3, rule)
-        self.assertTrue(result3)
-        self.assertEqual(event3['unique_count'], 3)
+        self.assertIsNotNone(result3)
+        self.assertIn('unique_count', result3)
+        self.assertEqual(result3['unique_count'], 3)
 
     def test_in_whitelist_partial_match(self):
         """测试白名单部分匹配"""

@@ -4,6 +4,7 @@ SEC-AUDITD Alert Engine
 轻量级告警引擎 - 读取 auditd 事件，应用规则，生成告警
 """
 
+import ast
 import os
 import sys
 import json
@@ -12,7 +13,7 @@ import time
 import re
 import logging
 import signal
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import defaultdict, deque
 from typing import Dict, List, Any, Optional
 
@@ -21,7 +22,6 @@ try:
     HAS_SIMPLEEVAL = True
 except ImportError:
     HAS_SIMPLEEVAL = False
-    import ast
 
 # 日志配置
 logging.basicConfig(
@@ -198,12 +198,33 @@ class RuleEngine:
         return rules
 
     def check_and_reload_rules(self):
-        """检查并重新加载规则"""
+        """检查并重新加载规则，同时清理过期的限流缓存"""
         now = time.time()
         if now - self.last_reload > self.reload_interval:
             logger.info("Reloading rules...")
             self.rules = self._load_rules()
             self.last_reload = now
+            self._clean_alert_cache()
+
+    def reload_rules(self):
+        """立即重新加载规则并清理过期限流缓存（可由信号处理器等外部触发器调用）"""
+        logger.info("Reloading rules...")
+        self.rules = self._load_rules()
+        self.last_reload = time.time()
+        self._clean_alert_cache()
+
+    def _clean_alert_cache(self):
+        """清理过期的限流缓存，防止内存无限增长"""
+        max_throttle = max(
+            (rule.get('alert', {}).get('throttle', 0) for rule in self.rules),
+            default=3600
+        )
+        cutoff = time.time() - max_throttle
+        expired_keys = [key for key, ts in self.alert_cache.items() if ts < cutoff]
+        for key in expired_keys:
+            del self.alert_cache[key]
+        if expired_keys:
+            logger.debug(f"Cleaned {len(expired_keys)} expired throttle cache entries")
 
     def process_event(self, event: Dict[str, Any]) -> List[Dict]:
         """处理事件，返回告警列表"""
@@ -223,12 +244,14 @@ class RuleEngine:
                     continue
 
                 # 检查聚合条件
+                extra_ctx: Optional[Dict] = None
                 if 'aggregate' in rule:
-                    if not self._check_aggregate(event, rule):
+                    extra_ctx = self._check_aggregate(event, rule)
+                    if extra_ctx is None:
                         continue
 
                 # 生成告警
-                alert = self._generate_alert(event, rule)
+                alert = self._generate_alert(event, rule, extra_ctx)
 
                 # 检查告警限流
                 if not self._should_throttle(alert, rule):
@@ -277,38 +300,97 @@ class RuleEngine:
                 return bool(simple_eval(expr, names=context))
             else:
                 # 回退到基于 AST 的安全实现
-                # 注意：这个实现只支持简单的表达式
-                logger.warning("simpleeval not available, using limited expression evaluation. Install with: pip install simpleeval")
+                logger.warning(
+                    "simpleeval not available, using limited AST-based expression evaluation. "
+                    "Supported: comparisons (==, !=, <, <=, >, >=), in/not in, and/or/not. "
+                    "For full expression support, install: pip install simpleeval"
+                )
                 return self._safe_eval_fallback(expr, context)
         except (NameError, SyntaxError, ValueError) as e:
             logger.debug(f"Filter eval error: {e}")
             return False
 
     def _safe_eval_fallback(self, expr: str, context: Dict) -> bool:
-        """安全的回退表达式求值（仅支持简单的 in 操作）"""
-        # 这是一个简化的实现，仅支持常见的模式
-        # 例如: "'text' in field"
+        """安全的回退表达式求值 - 基于 AST 解析，不使用 eval()。
+
+        支持的表达式类型：
+        - 字面量：字符串、数字、布尔值
+        - 变量名：从事件上下文中查找
+        - 比较：==, !=, <, <=, >, >=
+        - 成员测试：in, not in
+        - 布尔组合：and, or, not
+        - 链式比较：1 < x < 10
+
+        不支持函数调用、属性访问或任意 Python 表达式。
+        如需完整表达式支持，请安装 simpleeval：pip install simpleeval
+        """
         try:
-            # 检查是否为简单的 in 表达式
-            if ' in ' in expr:
-                parts = expr.split(' in ')
-                if len(parts) == 2:
-                    needle = parts[0].strip().strip("'\"")
-                    haystack_key = parts[1].strip()
-                    if haystack_key in context:
-                        haystack = str(context[haystack_key])
-                        return needle in haystack
-            # 对于其他表达式，使用受限的 eval
-            # 移除危险的内置函数访问
-            safe_dict = {"__builtins__": {}}
-            safe_dict.update(context)
-            return bool(eval(expr, safe_dict, {}))
+            tree = ast.parse(expr, mode='eval')
+            return bool(self._eval_ast_node(tree.body, context))
+        except (NameError, ValueError, TypeError) as e:
+            logger.debug(f"Fallback eval error for '{expr}': {e}")
+            return False
         except Exception as e:
-            logger.debug(f"Fallback eval error: {e}")
+            logger.debug(f"Unexpected fallback eval error: {e}")
             return False
 
-    def _check_aggregate(self, event: Dict, rule: Dict) -> bool:
-        """检查聚合条件"""
+    def _eval_ast_node(self, node: ast.AST, context: Dict) -> Any:
+        """递归求值 AST 节点（仅支持安全的操作，不允许函数调用或属性访问）"""
+        # 字面量常量（Python 3.8+）
+        if isinstance(node, ast.Constant):
+            return node.value
+        # Python 3.6/3.7 兼容性
+        if hasattr(ast, 'Str') and isinstance(node, ast.Str):
+            return node.s  # type: ignore[attr-defined]
+        if hasattr(ast, 'Num') and isinstance(node, ast.Num):
+            return node.n  # type: ignore[attr-defined]
+        if hasattr(ast, 'NameConstant') and isinstance(node, ast.NameConstant):
+            return node.value  # type: ignore[attr-defined]
+        # 变量名：从上下文中查找
+        if isinstance(node, ast.Name):
+            if node.id in context:
+                return context[node.id]
+            raise NameError(f"Unknown variable: {node.id}")
+        # 布尔运算（and / or）
+        if isinstance(node, ast.BoolOp):
+            if isinstance(node.op, ast.And):
+                return all(self._eval_ast_node(v, context) for v in node.values)
+            if isinstance(node.op, ast.Or):
+                return any(self._eval_ast_node(v, context) for v in node.values)
+        # 一元运算（not）
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return not self._eval_ast_node(node.operand, context)
+        # 比较运算
+        if isinstance(node, ast.Compare):
+            left = self._eval_ast_node(node.left, context)
+            for op, comparator in zip(node.ops, node.comparators):
+                right = self._eval_ast_node(comparator, context)
+                if isinstance(op, ast.Eq):
+                    result = (left == right)
+                elif isinstance(op, ast.NotEq):
+                    result = (left != right)
+                elif isinstance(op, ast.Lt):
+                    result = (left < right)
+                elif isinstance(op, ast.LtE):
+                    result = (left <= right)
+                elif isinstance(op, ast.Gt):
+                    result = (left > right)
+                elif isinstance(op, ast.GtE):
+                    result = (left >= right)
+                elif isinstance(op, ast.In):
+                    result = (left in right)
+                elif isinstance(op, ast.NotIn):
+                    result = (left not in right)
+                else:
+                    raise ValueError(f"Unsupported operator: {type(op).__name__}")
+                if not result:
+                    return False
+                left = right
+            return True
+        raise ValueError(f"Unsupported AST node type: {type(node).__name__}")
+
+    def _check_aggregate(self, event: Dict, rule: Dict) -> Optional[Dict]:
+        """检查聚合条件，返回 None 表示未触发，返回额外上下文字典表示已触发"""
         agg = rule['aggregate']
         window = agg.get('window', 60)
         group_by = agg.get('group_by', [])
@@ -331,18 +413,19 @@ class RuleEngine:
         count = len(self.state[rule_id][group_key])
         threshold = agg.get('count') or agg.get('threshold', 0)
 
+        extra_ctx: Dict = {'count': count}
+
         if 'unique' in agg:
             # 统计唯一值
             field = agg['unique']
             unique_values = set(str(e.get(field, '')) for _, e in self.state[rule_id][group_key])
             count = len(unique_values)
-            # 将唯一值计数添加到事件中，用于告警消息
-            event['unique_count'] = count
+            extra_ctx['count'] = count
+            extra_ctx['unique_count'] = count
 
-        # 将计数添加到事件中，用于告警消息
-        event['count'] = count
-
-        return count >= threshold
+        if count >= threshold:
+            return extra_ctx
+        return None
 
     def _in_whitelist(self, event: Dict, rule: Dict) -> bool:
         """检查是否在白名单"""
@@ -365,27 +448,29 @@ class RuleEngine:
 
         return False
 
-    def _generate_alert(self, event: Dict, rule: Dict) -> Dict:
+    def _generate_alert(self, event: Dict, rule: Dict, extra_ctx: Optional[Dict] = None) -> Dict:
         """生成告警"""
         alert_config = rule.get('alert', {})
         message = alert_config.get('message', 'Alert triggered')
 
         # 格式化消息
         try:
-            # 格式化消息
             format_ctx = {}
             for key, value in event.items():
                 if isinstance(value, (str, int, float, bool)):
                     format_ctx[key] = value
                 else:
                     format_ctx[key] = str(value)
+            # 合并聚合上下文（如 count、unique_count）
+            if extra_ctx:
+                format_ctx.update(extra_ctx)
 
             message = message.format(**format_ctx)
         except (KeyError, ValueError) as e:
             logger.debug(f"Message format error: {e}")
 
         return {
-            'timestamp': datetime.now(datetime.UTC).isoformat().replace('+00:00', 'Z') if hasattr(datetime, 'UTC') else datetime.utcnow().isoformat() + 'Z',
+            'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             'rule_id': rule['id'],
             'rule_name': rule['name'],
             'severity': rule.get('severity', 'medium'),
@@ -429,6 +514,27 @@ class AlertEngine:
         self.parser = AuditParser()
         self.event_count = 0
         self.alert_count = 0
+        self._running = True
+        self._setup_signal_handlers()
+
+    def _setup_signal_handlers(self):
+        """设置信号处理器"""
+        try:
+            signal.signal(signal.SIGTERM, self._handle_sigterm)
+            signal.signal(signal.SIGHUP, self._handle_sighup)
+        except (OSError, ValueError):
+            # 在非主线程或某些受限环境中信号处理可能不可用
+            logger.debug("Signal handlers could not be set up")
+
+    def _handle_sigterm(self, signum: int, frame: Any) -> None:
+        """处理 SIGTERM 信号（优雅退出）"""
+        logger.info("Received SIGTERM, shutting down gracefully...")
+        self._running = False
+
+    def _handle_sighup(self, signum: int, frame: Any) -> None:
+        """处理 SIGHUP 信号（重新加载规则）"""
+        logger.info("Received SIGHUP, reloading rules...")
+        self.rule_engine.reload_rules()
 
     def run(self):
         """运行引擎"""
@@ -460,7 +566,7 @@ class AlertEngine:
                 f.seek(0, 2)
                 logger.info("Waiting for new audit events...")
 
-                while True:
+                while self._running:
                     # 检查是否需要重新加载规则
                     self.rule_engine.check_and_reload_rules()
 
@@ -472,9 +578,11 @@ class AlertEngine:
                     self._process_line(line.strip())
 
         except KeyboardInterrupt:
-            logger.info(f"Stopped by user. Processed {self.event_count} events, generated {self.alert_count} alerts")
+            logger.info("Stopped by keyboard interrupt.")
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
+        finally:
+            logger.info(f"Alert engine stopped. Processed {self.event_count} events, generated {self.alert_count} alerts")
 
     def _process_line(self, line: str):
         """处理单行日志"""
@@ -520,8 +628,10 @@ class AlertEngine:
         filepath = config['path']
         format_type = config.get('format', 'json')
 
-        # 确保目录存在
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        # 确保目录存在（filepath 可能是纯文件名，此时 dirname 为空）
+        dir_name = os.path.dirname(filepath)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
 
         try:
             with open(filepath, 'a', encoding='utf-8') as f:

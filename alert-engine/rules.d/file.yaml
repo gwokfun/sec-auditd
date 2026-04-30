@@ -155,3 +155,172 @@ rules:
     alert:
       message: "警告：审计配置被修改: {file} by {process} (UID: {uid})"
       throttle: 60
+
+  # 检测 gshadow 文件变更
+  - id: gshadow_changes
+    name: "GShadow 文件变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "gshadow_changes"
+
+    alert:
+      message: "/etc/gshadow 被访问或修改 by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测旧密码文件变更
+  - id: opasswd_changes
+    name: "旧密码文件变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "opasswd_changes"
+
+    alert:
+      message: "/etc/security/opasswd 被修改 by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 SSH 客户端配置变更
+  - id: ssh_config_change
+    name: "SSH 客户端配置变更"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "ssh_config"
+
+    alert:
+      message: "SSH 客户端配置被修改 by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 init.d/upstart 启动脚本变更（可能的持久化攻击）
+  - id: init_changes
+    name: "Init 启动脚本变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "init_changes"
+
+    alert:
+      message: "Init 启动脚本被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测本地二进制目录变更
+  - id: local_bin_change
+    name: "本地二进制目录变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: ["local_bin_changes", "local_sbin_changes"]
+
+    alert:
+      message: "警告：本地二进制目录被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 Shell 环境配置变更（可能的持久化攻击）
+  - id: shell_env_change
+    name: "Shell 环境配置变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: ["profile_changes", "bashrc_changes", "bash_bashrc_changes", "environment_changes"]
+
+    alert:
+      message: "警告：Shell 环境配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 SELinux 配置变更
+  - id: selinux_change
+    name: "SELinux 配置变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "selinux_changes"
+
+    alert:
+      message: "SELinux 配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测 AppArmor 配置变更
+  - id: apparmor_change
+    name: "AppArmor 配置变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "apparmor_changes"
+
+    alert:
+      message: "AppArmor 配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测安全限制配置变更
+  - id: security_limits_change
+    name: "安全限制配置变更"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "security_limits"
+
+    alert:
+      message: "安全限制配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 检测内核模块移除
+  - id: module_removal
+    name: "内核模块移除"
+    enabled: true
+    severity: high
+
+    match:
+      key: "module_removal"
+
+    alert:
+      message: "内核模块被移除: {exe} by UID {uid}"
+      throttle: 60
+
+  # 检测审计日志修改（可能的日志篡改攻击）
+  - id: audit_log_change
+    name: "审计日志变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "audit_log"
+
+    alert:
+      message: "警告：审计日志目录被修改 by {process} (UID: {uid})"
+      throttle: 30
+
+  # 检测 audisp 配置变更
+  - id: audisp_config_change
+    name: "Audisp 配置变更"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "audisp_config"
+
+    alert:
+      message: "警告：Audisp 配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 30
+
+  # 检测审计工具执行（可能的审计规避）
+  - id: audit_tools_exec
+    name: "审计工具执行"
+    enabled: true
+    severity: high
+
+    match:
+      key: "audit_tools"
+
+    alert:
+      message: "审计工具被执行: {exe} by UID {uid}"
+      throttle: 60
