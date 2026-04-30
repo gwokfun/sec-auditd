@@ -400,6 +400,422 @@ class TestSignalHandling(TestEngineE2E):
             proc.kill()
             self.fail("进程未能在超时时间内退出")
 
+    def test_sighup_reloads_rules(self):
+        """测试 SIGHUP 触发规则重新加载"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            # 发送 SIGHUP 触发规则重载
+            proc.send_signal(signal.SIGHUP)
+
+            # 等待短暂时间，确保引擎继续运行（没有崩溃）
+            time.sleep(1)
+
+            # 验证进程仍在运行
+            self.assertIsNone(proc.poll(), "发送 SIGHUP 后引擎应继续运行")
+
+            # 写入一个事件，验证引擎仍然工作
+            test_event = 'type=EXECVE msg=audit(1234567890.999:999): exe="/tmp/after_reload" key="process_exec"'
+            self._append_audit_log(test_event)
+            self._wait_for_alerts(timeout=5)
+
+            alerts = self._read_alerts()
+            self.assertGreater(len(alerts), 0, "SIGHUP 后引擎应继续产生告警")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+class TestOutputFormats(TestEngineE2E):
+    """测试不同的输出格式"""
+
+    def setUp(self):
+        """设置支持多种输出格式的测试环境"""
+        super().setUp()
+        self.text_alert_log = os.path.join(self.temp_dir, 'alert_text.log')
+
+        # 创建包含 text 格式输出的配置
+        config_content = f"""
+engine:
+  input:
+    type: file
+    file: {self.audit_log}
+  output:
+    - type: file
+      path: {self.alert_log}
+      format: json
+    - type: file
+      path: {self.text_alert_log}
+      format: text
+  rules:
+    dir: {self.rules_dir}
+    reload_interval: 60
+"""
+        with open(self.config_file, 'w') as f:
+            f.write(config_content)
+
+    def test_json_output_format(self):
+        """测试 JSON 格式输出"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            test_event = 'type=EXECVE msg=audit(1234567890.123:456): exe="/tmp/json_test" key="process_exec"'
+            self._append_audit_log(test_event)
+            self._wait_for_alerts(timeout=5)
+
+            # 验证 JSON 格式
+            alerts = self._read_alerts()
+            self.assertGreater(len(alerts), 0, "应生成 JSON 格式告警")
+            alert = alerts[0]
+            self.assertIn('rule_id', alert)
+            self.assertIn('severity', alert)
+            self.assertIn('message', alert)
+            self.assertIn('timestamp', alert)
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def test_text_output_format(self):
+        """测试文本格式输出"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            test_event = 'type=EXECVE msg=audit(1234567890.123:456): exe="/tmp/text_test" key="process_exec"'
+            self._append_audit_log(test_event)
+            self._wait_for_alerts(timeout=5)
+
+            # 等待文本格式文件写入
+            start = time.time()
+            while time.time() - start < 5:
+                if os.path.exists(self.text_alert_log):
+                    with open(self.text_alert_log, 'r') as f:
+                        content = f.read()
+                        if content.strip():
+                            break
+                time.sleep(0.2)
+
+            self.assertTrue(os.path.exists(self.text_alert_log), "文本格式告警文件应存在")
+            with open(self.text_alert_log, 'r') as f:
+                text_content = f.read()
+            self.assertTrue(text_content.strip(), "文本格式告警文件不应为空")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+class TestWhitelistE2E(TestEngineE2E):
+    """测试白名单端到端过滤"""
+
+    def setUp(self):
+        """设置包含白名单规则的测试环境"""
+        super().setUp()
+
+        # 覆盖规则：带白名单的进程执行规则
+        rule_content = """
+rules:
+  - id: whitelist_exec_rule
+    name: "白名单进程执行规则"
+    enabled: true
+    severity: high
+    match:
+      key: "process_exec"
+    whitelist:
+      - exe: "/usr/bin/safe_process"
+    alert:
+      message: "可疑进程执行: {exe}"
+      throttle: 0
+"""
+        rule_file = os.path.join(self.rules_dir, 'whitelist_test.yaml')
+        with open(rule_file, 'w') as f:
+            f.write(rule_content)
+
+    def test_whitelist_blocks_alert(self):
+        """测试白名单中的进程不产生告警"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            # 写入白名单中的进程事件
+            whitelisted_event = 'type=EXECVE msg=audit(1234567890.123:100): exe="/usr/bin/safe_process" key="process_exec"'
+            self._append_audit_log(whitelisted_event)
+            time.sleep(2)
+
+            # 白名单进程不应产生 whitelist_exec_rule 告警
+            alerts = self._read_alerts()
+            whitelist_rule_alerts = [a for a in alerts if a.get('rule_id') == 'whitelist_exec_rule']
+            self.assertEqual(len(whitelist_rule_alerts), 0, "白名单进程不应触发告警")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def test_non_whitelist_triggers_alert(self):
+        """测试非白名单进程正常产生告警"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            # 写入非白名单进程事件
+            suspicious_event = 'type=EXECVE msg=audit(1234567890.123:200): exe="/tmp/suspicious_proc" key="process_exec"'
+            self._append_audit_log(suspicious_event)
+            self._wait_for_alerts(timeout=5)
+
+            # 非白名单进程应产生告警
+            alerts = self._read_alerts()
+            whitelist_rule_alerts = [a for a in alerts if a.get('rule_id') == 'whitelist_exec_rule']
+            self.assertGreater(len(whitelist_rule_alerts), 0, "非白名单进程应触发告警")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+class TestFilterExpressionsE2E(TestEngineE2E):
+    """测试过滤器表达式的端到端行为"""
+
+    def setUp(self):
+        """设置包含过滤器规则的测试环境"""
+        super().setUp()
+
+        # 覆盖规则：带多个过滤条件的规则
+        rule_content = """
+rules:
+  - id: filter_exec_rule
+    name: "过滤器进程执行规则"
+    enabled: true
+    severity: critical
+    match:
+      key: "process_exec"
+      filters:
+        - "'/tmp' in exe"
+    alert:
+      message: "检测到 /tmp 执行: {exe}"
+      throttle: 0
+
+  - id: uid_filter_rule
+    name: "UID 过滤规则"
+    enabled: true
+    severity: medium
+    match:
+      key: "process_exec"
+      filters:
+        - "uid == 0"
+    alert:
+      message: "Root 用户执行: {exe}"
+      throttle: 0
+"""
+        rule_file = os.path.join(self.rules_dir, 'filter_test.yaml')
+        with open(rule_file, 'w') as f:
+            f.write(rule_content)
+
+    def test_filter_matches_correctly(self):
+        """测试过滤器正确过滤匹配事件"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            # 匹配过滤器的事件（/tmp 路径）
+            match_event = 'type=EXECVE msg=audit(1234567890.123:300): exe="/tmp/malware" uid=1000 key="process_exec"'
+            self._append_audit_log(match_event)
+            self._wait_for_alerts(timeout=5)
+
+            alerts = self._read_alerts()
+            filter_alerts = [a for a in alerts if a.get('rule_id') == 'filter_exec_rule']
+            self.assertGreater(len(filter_alerts), 0, "匹配 /tmp 路径的事件应触发过滤器告警")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def test_filter_blocks_non_matching_event(self):
+        """测试过滤器不匹配时不产生告警"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            # 不匹配过滤器的事件（非 /tmp 路径）
+            no_match_event = 'type=EXECVE msg=audit(1234567890.123:400): exe="/usr/bin/ls" uid=1000 key="process_exec"'
+            self._append_audit_log(no_match_event)
+            time.sleep(2)
+
+            alerts = self._read_alerts()
+            filter_alerts = [a for a in alerts if a.get('rule_id') == 'filter_exec_rule']
+            self.assertEqual(len(filter_alerts), 0, "非 /tmp 路径的事件不应触发 filter_exec_rule 告警")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def test_uid_filter(self):
+        """测试数值型 UID 过滤器"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            # Root 用户执行（uid=0）
+            root_event = 'type=EXECVE msg=audit(1234567890.123:500): exe="/usr/bin/passwd" uid=0 key="process_exec"'
+            self._append_audit_log(root_event)
+            self._wait_for_alerts(timeout=5)
+
+            alerts = self._read_alerts()
+            uid_alerts = [a for a in alerts if a.get('rule_id') == 'uid_filter_rule']
+            self.assertGreater(len(uid_alerts), 0, "Root 用户执行应触发 uid_filter_rule 告警")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+class TestASTFallbackE2E(TestEngineE2E):
+    """测试不使用 simpleeval 时 AST 回退求值的端到端行为"""
+
+    def setUp(self):
+        """设置测试环境，使用需要表达式求值的规则"""
+        super().setUp()
+
+        rule_content = """
+rules:
+  - id: ast_filter_rule
+    name: "AST 回退过滤规则"
+    enabled: true
+    severity: high
+    match:
+      key: "file_write"
+      filters:
+        - "'/etc' in path"
+    alert:
+      message: "检测到 /etc 写入: {path}"
+      throttle: 0
+"""
+        rule_file = os.path.join(self.rules_dir, 'ast_test.yaml')
+        with open(rule_file, 'w') as f:
+            f.write(rule_content)
+
+    def test_engine_without_simpleeval(self):
+        """测试在没有 simpleeval 时引擎仍能正确处理过滤器"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        # 通过设置 PYTHONPATH 排除 simpleeval，模拟其不可用的情况
+        env = os.environ.copy()
+        # 创建一个临时模块来屏蔽 simpleeval
+        mock_simpleeval_dir = os.path.join(self.temp_dir, 'mock_modules')
+        os.makedirs(mock_simpleeval_dir)
+        with open(os.path.join(mock_simpleeval_dir, 'simpleeval.py'), 'w') as f:
+            f.write("raise ImportError('simpleeval not available')\n")
+        env['PYTHONPATH'] = mock_simpleeval_dir + os.pathsep + env.get('PYTHONPATH', '')
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env
+        )
+
+        try:
+            time.sleep(2)
+
+            # 写入匹配 /etc 路径的事件
+            test_event = 'type=SYSCALL msg=audit(1234567890.123:600): path="/etc/passwd" key="file_write"'
+            self._append_audit_log(test_event)
+            self._wait_for_alerts(timeout=5)
+
+            alerts = self._read_alerts()
+            ast_alerts = [a for a in alerts if a.get('rule_id') == 'ast_filter_rule']
+            self.assertGreater(len(ast_alerts), 0, "AST 回退求值应正确匹配 /etc 路径事件")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
 
 def run_e2e_tests():
     """运行所有端到端测试"""
@@ -411,6 +827,10 @@ def run_e2e_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestLaunchScriptE2E))
     suite.addTests(loader.loadTestsFromTestCase(TestMultiVersionCompatibility))
     suite.addTests(loader.loadTestsFromTestCase(TestSignalHandling))
+    suite.addTests(loader.loadTestsFromTestCase(TestOutputFormats))
+    suite.addTests(loader.loadTestsFromTestCase(TestWhitelistE2E))
+    suite.addTests(loader.loadTestsFromTestCase(TestFilterExpressionsE2E))
+    suite.addTests(loader.loadTestsFromTestCase(TestASTFallbackE2E))
 
     # 运行测试
     runner = unittest.TextTestRunner(verbosity=2)
