@@ -33,6 +33,7 @@ MINIMAL_MODE=false
 WITH_BINARY=false
 SKIP_ALERT_ENGINE=false
 START_SERVICE=true
+PYTHON_VERSION=""
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -53,20 +54,27 @@ while [[ $# -gt 0 ]]; do
             START_SERVICE=false
             shift
             ;;
+        --python-version|-p)
+            PYTHON_VERSION="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "用法: $0 [选项]"
             echo ""
             echo "选项:"
-            echo "  --auto, -a         自动模式，跳过所有交互"
-            echo "  --minimal, -m      最小化安装，仅安装核心组件"
-            echo "  --with-binary, -b  使用二进制版本（如果可用）"
-            echo "  --no-start         安装后不启动服务"
-            echo "  --help, -h         显示此帮助信息"
+            echo "  --auto, -a                    自动模式，跳过所有交互"
+            echo "  --minimal, -m                 最小化安装，仅安装核心组件"
+            echo "  --with-binary, -b             使用二进制版本（如果可用）"
+            echo "  --python-version VERSION, -p  指定 Python 版本 (2.7, 3.5, 3.6, 或默认 3.x)"
+            echo "  --no-start                    安装后不启动服务"
+            echo "  --help, -h                    显示此帮助信息"
             echo ""
             echo "示例:"
-            echo "  $0 --auto                    # 全自动安装"
-            echo "  $0 --minimal --auto          # 最小化自动安装"
-            echo "  $0 --with-binary --auto      # 使用二进制版本安装"
+            echo "  $0 --auto                              # 全自动安装"
+            echo "  $0 --minimal --auto                    # 最小化自动安装"
+            echo "  $0 --with-binary --auto                # 使用二进制版本安装"
+            echo "  $0 --python-version 2.7 --auto         # 使用 Python 2.7"
+            echo "  $0 -p 3.6 --auto                       # 使用 Python 3.6"
             exit 0
             ;;
         *)
@@ -269,6 +277,7 @@ info "✓ 日志轮转配置完成"
 step "[5/8] 安装告警引擎..."
 if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
     cp -r "$REPO_DIR/alert-engine"/* "$INSTALL_DIR/alert-engine/"
+    chmod +x "$INSTALL_DIR/alert-engine/launch-engine.sh"
 
     # 选择执行方式
     if [ "$WITH_BINARY" = true ] && [ -f "$REPO_DIR/dist/engine" ]; then
@@ -277,8 +286,13 @@ if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
         chmod +x "$INSTALL_DIR/alert-engine/engine"
         EXEC_CMD="$INSTALL_DIR/alert-engine/engine"
     else
-        chmod +x "$INSTALL_DIR/alert-engine/engine.py"
-        EXEC_CMD="/usr/bin/python3 $INSTALL_DIR/alert-engine/engine.py"
+        # 使用 launch-engine.sh 脚本启动，支持 Python 版本选择
+        if [ -n "$PYTHON_VERSION" ]; then
+            info "配置使用 Python $PYTHON_VERSION"
+            EXEC_CMD="$INSTALL_DIR/alert-engine/launch-engine.sh --python-version $PYTHON_VERSION"
+        else
+            EXEC_CMD="$INSTALL_DIR/alert-engine/launch-engine.sh"
+        fi
     fi
 
     # 创建 systemd 服务

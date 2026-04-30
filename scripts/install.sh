@@ -4,6 +4,37 @@
 
 set -e
 
+# 默认参数
+PYTHON_VERSION=""
+
+# 解析命令行参数
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --python-version|-p)
+            PYTHON_VERSION="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "用法: $0 [选项]"
+            echo ""
+            echo "选项:"
+            echo "  --python-version VERSION, -p  指定 Python 版本 (2.7, 3.5, 3.6, 或默认 3.x)"
+            echo "  --help, -h                    显示此帮助信息"
+            echo ""
+            echo "示例:"
+            echo "  $0                            # 使用默认 Python 版本"
+            echo "  $0 --python-version 2.7       # 使用 Python 2.7"
+            echo "  $0 -p 3.6                     # 使用 Python 3.6"
+            exit 0
+            ;;
+        *)
+            echo "错误：未知选项 '$1'"
+            echo "使用 --help 查看帮助"
+            exit 1
+            ;;
+    esac
+done
+
 INSTALL_DIR="/etc/sec-auditd"
 LOG_DIR="/var/log/sec-auditd"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -124,7 +155,15 @@ echo ""
 echo "[5/7] 安装告警引擎..."
 if [ -z "$SKIP_ALERT_ENGINE" ]; then
     cp -r "$REPO_DIR/alert-engine"/* "$INSTALL_DIR/alert-engine/"
-    chmod +x "$INSTALL_DIR/alert-engine/engine.py"
+    chmod +x "$INSTALL_DIR/alert-engine/launch-engine.sh"
+
+    # 构建启动命令
+    if [ -n "$PYTHON_VERSION" ]; then
+        echo "配置使用 Python $PYTHON_VERSION"
+        EXEC_CMD="$INSTALL_DIR/alert-engine/launch-engine.sh --python-version $PYTHON_VERSION"
+    else
+        EXEC_CMD="$INSTALL_DIR/alert-engine/launch-engine.sh"
+    fi
 
     # 创建 systemd 服务
     cat > /etc/systemd/system/sec-auditd-alert.service <<EOF
@@ -137,7 +176,7 @@ Requires=auditd.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 $INSTALL_DIR/alert-engine/engine.py $INSTALL_DIR/alert-engine/config.yaml
+ExecStart=$EXEC_CMD $INSTALL_DIR/alert-engine/config.yaml
 Restart=always
 RestartSec=5
 
