@@ -1,0 +1,426 @@
+# Neo23x0/auditd 集成告警规则
+# 对应 audit.rules.d/40-neo23x0.rules 中引入的新审计键
+rules:
+
+  # 进程创建（execve/execveat，高保真遥测）
+  - id: neo23x0_process_creation
+    name: "进程创建（Neo23x0）"
+    enabled: false  # 事件量大，按需开启；精确检测请在下游 SIEM/Sigma 处理
+    severity: low
+
+    match:
+      key: "process_creation"
+
+    alert:
+      message: "进程创建: {exe} by UID {uid} (PID: {pid})"
+      throttle: 60
+
+  # 权限修改（chmod/chown/setxattr）
+  - id: neo23x0_perm_mod
+    name: "文件权限修改"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "perm_mod"
+
+    whitelist:
+      - process: "dpkg"
+      - process: "rpm"
+      - process: "apt"
+      - process: "apt-get"
+      - process: "yum"
+      - process: "dnf"
+      - process: "pip"
+      - process: "pip3"
+
+    alert:
+      message: "文件权限被修改: {syscall} by {process} (UID: {uid})"
+      throttle: 300
+
+  # 未授权文件访问（用户态）
+  - id: neo23x0_unauthedfileaccess
+    name: "未授权文件访问"
+    enabled: true
+    severity: high
+
+    match:
+      key: "unauthedfileaccess"
+
+    alert:
+      message: "未授权文件访问被拒绝: {exe} (UID: {uid}, PID: {pid})"
+      throttle: 120
+
+  # 未授权文件访问（系统账户/守护进程）
+  - id: neo23x0_unauthedfileaccess_system
+    name: "系统账户未授权文件访问"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "unauthedfileaccess_system"
+
+    alert:
+      message: "系统进程遭遇权限拒绝: {exe} (UID: {uid})"
+      throttle: 300
+
+  # ptrace 调用（注入/调试/追踪）
+  - id: neo23x0_tracing
+    name: "Ptrace 调用检测"
+    enabled: true
+    severity: high
+
+    match:
+      key: "tracing"
+
+    whitelist:
+      - process: "gdb"
+      - process: "strace"
+      - process: "ltrace"
+
+    alert:
+      message: "警告：ptrace 被调用: {exe} (UID: {uid}, PID: {pid})"
+      throttle: 60
+
+  # 匿名文件创建（fileless 攻击）
+  - id: neo23x0_anon_file_create
+    name: "匿名文件创建（内存执行风险）"
+    enabled: true
+    severity: high
+
+    match:
+      key: "anon_file_create"
+
+    alert:
+      message: "警告：memfd_create 被调用（可能的内存执行）: {exe} (UID: {uid})"
+      throttle: 60
+
+  # 时间戳篡改（T1070.006）
+  - id: neo23x0_timestomp
+    name: "文件时间戳篡改（T1070.006）"
+    enabled: true
+    severity: high
+
+    match:
+      key: "T1070_006_timestomp"
+
+    whitelist:
+      - process: "touch"
+
+    alert:
+      message: "警告：文件时间戳被修改（可能的痕迹清除）: {exe} (UID: {uid})"
+      throttle: 60
+
+  # eBPF 程序加载
+  - id: neo23x0_bpf
+    name: "eBPF 程序加载"
+    enabled: true
+    severity: high
+
+    match:
+      key: "bpf"
+
+    whitelist:
+      - process: "tc"
+      - process: "ip"
+      - process: "bpftool"
+
+    alert:
+      message: "警告：eBPF 程序被加载: {exe} (UID: {uid})"
+      throttle: 60
+
+  # 命名空间操作（容器逃逸/权限绕过）
+  - id: neo23x0_namespaces
+    name: "命名空间操作"
+    enabled: true
+    severity: high
+
+    match:
+      key: "namespaces"
+
+    whitelist:
+      - process: "docker"
+      - process: "podman"
+      - process: "containerd"
+      - process: "runc"
+      - process: "unshare"
+
+    alert:
+      message: "命名空间操作被检测: {syscall} by {exe} (UID: {uid})"
+      throttle: 60
+
+  # 跨进程内存访问（process_vm_readv/writev）
+  - id: neo23x0_process_vm
+    name: "跨进程内存访问"
+    enabled: true
+    severity: high
+
+    match:
+      key: "process_vm"
+
+    whitelist:
+      - process: "gdb"
+      - process: "python"
+      - process: "python3"
+
+    alert:
+      message: "警告：跨进程内存访问: {exe} (UID: {uid})"
+      throttle: 60
+
+  # io_uring（审计盲区，已知绕过审计）
+  - id: neo23x0_io_uring
+    name: "io_uring 使用（审计盲区）"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "io_uring"
+
+    alert:
+      message: "io_uring 被使用（可能绕过审计）: {exe} (UID: {uid})"
+      throttle: 300
+
+  # userfaultfd（利用原语）
+  - id: neo23x0_userfaultfd
+    name: "userfaultfd 利用原语"
+    enabled: true
+    severity: high
+
+    match:
+      key: "userfaultfd"
+
+    alert:
+      message: "警告：userfaultfd 被调用（潜在利用原语）: {exe} (UID: {uid})"
+      throttle: 60
+
+  # 系统重启/关机
+  - id: neo23x0_reboot
+    name: "系统重启/关机"
+    enabled: true
+    severity: high
+
+    match:
+      key: "reboot"
+
+    alert:
+      message: "系统重启/关机 syscall 被调用: {exe} (UID: {uid})"
+      throttle: 60
+
+  # 权限滥用（root 访问用户家目录）
+  - id: neo23x0_power_abuse
+    name: "管理员权限滥用"
+    enabled: true
+    severity: high
+
+    match:
+      key: "power_abuse"
+
+    alert:
+      message: "警告：root 进程访问了用户家目录: {exe} (UID: {uid})"
+      throttle: 60
+
+  # 软件包管理器配置变更
+  - id: neo23x0_software_mgmt
+    name: "软件包管理器配置变更"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "software_mgmt"
+
+    alert:
+      message: "软件包管理配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 300
+
+  # Docker 配置变更
+  - id: neo23x0_docker
+    name: "Docker 配置变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "docker"
+
+    alert:
+      message: "Docker 配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 容器运行时配置变更
+  - id: neo23x0_containers
+    name: "容器运行时配置变更"
+    enabled: true
+    severity: high
+
+    match:
+      key: "containers"
+
+    alert:
+      message: "容器配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 内核模块加载（来自 neo23x0 规则集）
+  - id: neo23x0_modules
+    name: "内核模块操作（Neo23x0）"
+    enabled: true
+    severity: high
+
+    match:
+      key: "modules"
+
+    alert:
+      message: "内核模块被加载/卸载: {syscall} by {process} (UID: {uid})"
+      throttle: 60
+
+  # KExec 内核替换
+  - id: neo23x0_kexec
+    name: "KExec 内核替换"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "KEXEC"
+
+    alert:
+      message: "警告：kexec 被调用（内核替换）: {exe} (UID: {uid})"
+      throttle: 30
+
+  # 挂载操作
+  - id: neo23x0_mount
+    name: "挂载操作"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "mount"
+
+    whitelist:
+      - process: "systemd"
+      - process: "mount"
+      - process: "udisks"
+      - process: "udisksd"
+
+    alert:
+      message: "挂载操作: {syscall} by {process} (UID: {uid})"
+      throttle: 300
+
+  # 时间修改
+  - id: neo23x0_time
+    name: "系统时间修改"
+    enabled: true
+    severity: high
+
+    match:
+      key: "time"
+
+    whitelist:
+      - process: "chronyd"
+      - process: "ntpd"
+      - process: "systemd-timesyncd"
+
+    alert:
+      message: "系统时间被修改: {syscall} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 网络修改（hostname/domainname）
+  - id: neo23x0_network_modifications
+    name: "网络环境修改"
+    enabled: true
+    severity: high
+
+    match:
+      key: "network_modifications"
+
+    alert:
+      message: "网络环境被修改: {syscall}/{file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 成功的 IPv4/IPv6 网络连接（高保真）
+  - id: neo23x0_network_connect
+    name: "成功的出站网络连接"
+    enabled: false  # 事件量大，按需开启
+    severity: low
+
+    match:
+      key: ["network_connect_4", "network_connect_6"]
+
+    whitelist:
+      - process: "curl"
+      - process: "wget"
+      - process: "apt"
+      - process: "apt-get"
+      - process: "yum"
+      - process: "dnf"
+
+    alert:
+      message: "出站网络连接: {exe} (UID: {uid})"
+      throttle: 300
+
+  # 文件删除事件
+  - id: neo23x0_delete
+    name: "用户文件删除"
+    enabled: true
+    severity: low
+
+    match:
+      key: "delete"
+
+    alert:
+      message: "文件被删除: {syscall} by {process} (UID: {uid})"
+      throttle: 300
+
+  # DAC 权限修改（sudo 配置键 actions）
+  - id: neo23x0_actions
+    name: "Sudoers 配置变更（Neo23x0）"
+    enabled: true
+    severity: critical
+
+    match:
+      key: "actions"
+
+    alert:
+      message: "警告：Sudoers 配置被修改: {file} by {process} (UID: {uid})"
+      throttle: 60
+
+  # 会话信息变更
+  - id: neo23x0_session
+    name: "会话信息变更"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "session"
+
+    alert:
+      message: "会话信息文件被修改: {file} by {process} (UID: {uid})"
+      throttle: 300
+
+  # 32位 ABI 使用（可能的漏洞利用）
+  - id: neo23x0_32bit_abi
+    name: "32位 ABI 使用（潜在利用）"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "32bit_abi"
+
+    whitelist:
+      - process: "wine"
+      - process: "steam"
+      - process: "wineserver"
+
+    alert:
+      message: "32位 syscall 被调用（可能的 ABI 利用）: {exe} (UID: {uid})"
+      throttle: 300
+
+  # IPC 系统调用
+  - id: neo23x0_ipc
+    name: "进程间通信（IPC）"
+    enabled: false  # 事件量大，按需开启
+    severity: low
+
+    match:
+      key: "Inter-Process_Communication"
+
+    alert:
+      message: "IPC 系统调用: {syscall} by {process} (UID: {uid})"
+      throttle: 600
