@@ -13,13 +13,13 @@ rules:
     # 白名单进程
     whitelist:
       - process: "apt"
+        exe: "/usr/bin/apt"
       - process: "apt-get"
+        exe: "/usr/bin/apt-get"
       - process: "yum"
+        exe: "/usr/bin/yum"
       - process: "dnf"
-      - process: "curl"
-      - process: "wget"
-      - process: "python"
-      - process: "python3"
+        exe: "/usr/bin/dnf"
 
     # 告警配置
     alert:

@@ -9,14 +9,9 @@
 -w /etc/gshadow -p rwa -k gshadow_changes
 -w /etc/security/opasswd -p wa -k opasswd_changes
 
-# SSH 配置和密钥
--w /etc/ssh/sshd_config -p wa -k sshd_config
--w /etc/ssh/ssh_config -p wa -k ssh_config
--w /root/.ssh/ -p wa -k root_ssh_keys
+# SSH 配置和密钥（40-neo23x0.rules 已覆盖 /etc/ssh/ 整个目录和 /root/.ssh）
 
-# Sudo 配置
--w /etc/sudoers -p wa -k sudoers_changes
--w /etc/sudoers.d/ -p wa -k sudoers_changes
+# Sudo 配置（40-neo23x0.rules 已覆盖 /etc/sudoers 和 /etc/sudoers.d/）
 
 # 系统启动和服务
 -w /etc/systemd/ -p wa -k systemd_changes
@@ -35,12 +30,10 @@
 -w /etc/crontab -p wa -k cron_changes
 -w /var/spool/cron/ -p wa -k cron_changes
 
-# 内核模块
+# 内核模块（syscall 审计已在 40-neo23x0.rules 中覆盖）
 -w /sbin/insmod -p x -k module_insertion
 -w /sbin/rmmod -p x -k module_removal
 -w /sbin/modprobe -p x -k module_insertion
--a always,exit -F arch=b64 -S init_module -S delete_module -k kernel_modules
--a always,exit -F arch=b32 -S init_module -S delete_module -k kernel_modules
 
 # PAM 配置
 -w /etc/pam.d/ -p wa -k pam_changes
@@ -62,13 +55,7 @@
 
 # 系统配置文件
 -w /etc/profile -p wa -k profile_changes
--w /etc/bashrc -p wa -k bashrc_changes
 -w /etc/bash.bashrc -p wa -k bash_bashrc_changes
 -w /etc/environment -p wa -k environment_changes
 
-# SELinux 配置
--w /etc/selinux/ -p wa -k selinux_changes
-
-# AppArmor 配置
--w /etc/apparmor/ -p wa -k apparmor_changes
--w /etc/apparmor.d/ -p wa -k apparmor_changes
+# SELinux 和 AppArmor 配置（40-neo23x0.rules 已覆盖）

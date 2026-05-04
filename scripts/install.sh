@@ -110,9 +110,21 @@ echo ""
 echo "[3/7] 复制 auditd 规则配置..."
 cp -r "$REPO_DIR/audit.rules.d"/* "$INSTALL_DIR/audit.rules.d/" 2>/dev/null || true
 
-# 生成完整的 auditd 规则文件
+# 生成完整的 auditd 规则文件（过滤不存在的路径）
 echo "✓ 生成 auditd 规则文件..."
-cat "$INSTALL_DIR/audit.rules.d"/*.rules > /etc/audit/rules.d/sec-auditd.rules
+cat "$INSTALL_DIR/audit.rules.d"/*.rules | while IFS= read -r line; do
+    # 跳过空行和注释
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && echo "$line" && continue
+    # 对 -w 规则检查路径是否存在
+    if [[ "$line" =~ ^[[:space:]]*-w[[:space:]]+([^[:space:]]+) ]]; then
+        path="${BASH_REMATCH[1]}"
+        if [ ! -e "$path" ]; then
+            echo "# SKIPPED (path not found: $path): $line"
+            continue
+        fi
+    fi
+    echo "$line"
+done > /etc/audit/rules.d/sec-auditd.rules
 echo "✓ 规则文件已生成: /etc/audit/rules.d/sec-auditd.rules"
 
 echo ""
@@ -143,7 +155,7 @@ cat > /etc/logrotate.d/sec-auditd <<'EOF'
     delaycompress
     missingok
     notifempty
-    create 0644 root root
+    create 0600 root root
     size 50M
     dateext
     dateformat -%Y%m%d-%s

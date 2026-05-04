@@ -2,12 +2,6 @@
 # 进程执行监控规则
 # ============================================
 
-# 监控所有进程执行（64位）
--a always,exit -F arch=b64 -S execve -k process_exec
-
-# 监控所有进程执行（32位，如果系统支持）
--a always,exit -F arch=b32 -S execve -k process_exec
-
 # 监控特定目录下的执行（可疑目录）
 -a always,exit -F arch=b64 -S execve -F dir=/tmp -k suspicious_exec_tmp
 -a always,exit -F arch=b64 -S execve -F dir=/dev/shm -k suspicious_exec_shm

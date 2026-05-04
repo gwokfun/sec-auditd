@@ -22,10 +22,8 @@
 -w /var/log/audit/ -p wra -k auditlog
 -w /var/audit/ -p wra -k auditlog
 
-## Auditd configuration
--w /etc/audit/ -p wa -k auditconfig
+## Auditd configuration（/etc/audit/ 和 /etc/audisp/ 已在 99-finalize.rules 中覆盖）
 -w /etc/libaudit.conf -p wa -k auditconfig
--w /etc/audisp/ -p wa -k audispconfig
 
 # Filters ---------------------------------------------------------------------
 
@@ -41,18 +39,7 @@
 -a never,exit -F arch=b32 -S all -F exe=/usr/bin/vmtoolsd
 
 ## High Volume Event Filter (especially on Linux Workstations)
--a never,exit -F arch=b32 -F dir=/dev/shm/ -F key=sharedmemaccess
--a never,exit -F arch=b64 -F dir=/dev/shm/ -F key=sharedmemaccess
-
--a never,exit -F arch=b32 -F dir=/var/lock/lvm/ -F key=locklvm
--a never,exit -F arch=b64 -F dir=/var/lock/lvm/ -F key=locklvm
-
-## Filebeat
--a always,exit -F arch=b32 -F dir=/etc/filebeat/ -F perm=wa -F key=filebeat
--a always,exit -F arch=b64 -F dir=/etc/filebeat/ -F perm=wa -F key=filebeat
-
--a always,exit -F arch=b32 -F dir=/usr/share/filebeat/ -F perm=wa -F key=filebeat
--a always,exit -F arch=b64 -F dir=/usr/share/filebeat/ -F perm=wa -F key=filebeat
+-w /dev/shm/ -p wa -k sharedmemaccess
 
 # Rules -----------------------------------------------------------------------
 
@@ -131,9 +118,7 @@
 -a always,exit -F arch=b32 -S connect -F a2=28 -F success=1 -F key=network_connect_6
 
 ### Changes to network configuration files
--w /etc/sysconfig/ -p wa -k sysconfig
 -w /etc/network/ -p wa -k network
--a always,exit -F dir=/etc/NetworkManager/ -F perm=wa -k network_modifications
 
 ### Firewall configuration
 -w /etc/nftables.conf -p wa -k firewall
@@ -157,12 +142,7 @@
 -w /etc/rc.local -p wa -k init
 
 ## System binary and boot path changes
--a always,exit -F arch=b32 -F dir=/bin -F perm=wa -k bin_writes
--a always,exit -F arch=b64 -F dir=/bin -F perm=wa -k bin_writes
--a always,exit -F arch=b32 -F dir=/usr -F perm=wa -k usr_writes
--a always,exit -F arch=b64 -F dir=/usr -F perm=wa -k usr_writes
--a always,exit -F arch=b32 -F dir=/boot -F perm=wa -k boot_writes
--a always,exit -F arch=b64 -F dir=/boot -F perm=wa -k boot_writes
+-w /boot -p wa -k boot_writes
 
 ## Library search paths
 -w /etc/ld.so.conf -p wa -k libpath
@@ -279,8 +259,9 @@
 -a always,exit -F arch=b64 -S acct -k process_accounting
 -a always,exit -F arch=b32 -S acct -k process_accounting
 
-## Privilege Abuse (admin looking in user's home dir)
--a always,exit -F dir=/home -F uid=0 -F auid>=1000 -F auid!=unset -C auid!=obj_uid -k power_abuse
+## Privilege Abuse (admin looking in user's home dir) — requires syscall-based rule
+-a always,exit -F arch=b64 -S openat -F dir=/home -F uid=0 -F auid>=1000 -F auid!=unset -k power_abuse
+-a always,exit -F arch=b32 -S openat -F dir=/home -F uid=0 -F auid>=1000 -F auid!=unset -k power_abuse
 
 # Socket Creations
 -a always,exit -F arch=b32 -S socket -F a0=2  -k network_socket_created
@@ -292,29 +273,11 @@
 
 ## Package manager configuration
 -w /etc/apt/ -p wa -k software_mgmt
--w /etc/dnf/ -p wa -k software_mgmt
--w /etc/yum.repos.d/ -p wa -k software_mgmt
 
 ## Container configuration
 -w /var/lib/docker -p wa -k docker
 -w /etc/docker -p wa -k docker
 -w /etc/containers/ -p wa -k containers
-
-# CrowdStrike Falcon
--a always,exit -F arch=b32 -F dir=/etc/crowdstrike/ -F perm=wa -F key=falcon_sensor
--a always,exit -F arch=b64 -F dir=/etc/crowdstrike/ -F perm=wa -F key=falcon_sensor
-
--a always,exit -F arch=b32 -F dir=/usr/lib/crowdstrike/ -F perm=wa -F key=falcon_sensor
--a always,exit -F arch=b64 -F dir=/usr/lib/crowdstrike/ -F perm=wa -F key=falcon_sensor
-
--a always,exit -F arch=b32 -F dir=/opt/CrowdStrike/ -F perm=wa -F key=falcon_sensor
--a always,exit -F arch=b64 -F dir=/opt/CrowdStrike/ -F perm=wa -F key=falcon_sensor
-
--a always,exit -F arch=b32 -F dir=/var/log/crowdstrike/ -F perm=wa -F key=falcon_sensor
--a always,exit -F arch=b64 -F dir=/var/log/crowdstrike/ -F perm=wa -F key=falcon_sensor
-
--a always,exit -F arch=b32 -S connect -F exe=/opt/CrowdStrike/falcon-sensor -F key=crowdstrike_network
--a always,exit -F arch=b64 -S connect -F exe=/opt/CrowdStrike/falcon-sensor -F key=crowdstrike_network
 
 # IPC system calls
 -a always,exit -F arch=b64 -S msgctl -S msgget -S semctl -S semget -S shmctl -S shmget -k Inter-Process_Communication

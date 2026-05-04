@@ -7,6 +7,7 @@ Comprehensive unit tests for SEC-AUDITD Alert Engine
 import unittest
 import sys
 import os
+import stat
 import tempfile
 import time
 from unittest.mock import patch
@@ -632,6 +633,7 @@ engine:
 
         # 检查文件是否创建
         self.assertTrue(os.path.exists(self.alert_log))
+        self.assertEqual(stat.S_IMODE(os.stat(self.alert_log).st_mode), 0o600)
 
         # 检查内容
         with open(self.alert_log, 'r') as f:

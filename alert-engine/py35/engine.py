@@ -5,6 +5,7 @@ SEC-AUDITD Alert Engine - Python 3.5 Compatible
 """
 
 import ast
+import io
 import os
 import sys
 import json
@@ -547,30 +548,54 @@ class AlertEngine:
             logger.error("File not found: {}".format(filepath))
             sys.exit(1)
 
+        f = None
+        current_identity = None
+        seek_to_end = True
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-                # 跳到文件末尾（只处理新事件）
-                f.seek(0, 2)
-                logger.info("Waiting for new audit events...")
+            while self._running:
+                if f is None:
+                    f = open(filepath, 'r', encoding='utf-8', errors='replace')
+                    if seek_to_end:
+                        f.seek(0, 2)
+                    current_identity = self._file_identity(filepath)
+                    logger.info("Waiting for new audit events...")
 
-                while self._running:
-                    # 检查是否需要重新加载规则
-                    self.rule_engine.check_and_reload_rules()
+                # 检查是否需要重新加载规则
+                self.rule_engine.check_and_reload_rules()
 
-                    line = f.readline()
-                    if not line:
-                        time.sleep(0.5)  # 增加睡眠时间以减少 CPU 占用
-                        continue
-
+                line = f.readline()
+                if line:
                     self._process_line(line.strip())
+                    continue
+
+                latest_identity = self._file_identity(filepath)
+                if latest_identity and latest_identity != current_identity:
+                    logger.info("Audit log rotated, reopening: {}".format(filepath))
+                    f.close()
+                    f = None
+                    current_identity = None
+                    seek_to_end = False
+                    continue
+
+                time.sleep(0.5)  # 增加睡眠时间以减少 CPU 占用
 
         except KeyboardInterrupt:
             logger.info("Stopped by keyboard interrupt.")
         except Exception as e:
             logger.error("Error: {}".format(e), exc_info=True)
         finally:
+            if f is not None:
+                f.close()
             logger.info("Alert engine stopped. Processed {} events, generated {} alerts".format(
                 self.event_count, self.alert_count))
+
+    def _file_identity(self, filepath: str) -> Optional[tuple]:
+        """返回文件身份，用于检测 logrotate 后的 inode 变化"""
+        try:
+            st = os.stat(filepath)
+            return (st.st_dev, st.st_ino)
+        except OSError:
+            return None
 
     def _process_line(self, line: str):
         """处理单行日志"""
@@ -622,7 +647,7 @@ class AlertEngine:
             os.makedirs(dir_name, exist_ok=True)
 
         try:
-            with open(filepath, 'a', encoding='utf-8') as f:
+            with self._open_secure_append(filepath) as f:
                 if format_type == 'json':
                     f.write(json.dumps(alert, ensure_ascii=False) + '\n')
                 else:
@@ -632,6 +657,16 @@ class AlertEngine:
             logger.warning("[{}] {}".format(alert['severity'].upper(), alert['message']))
         except Exception as e:
             logger.error("Failed to write alert to file: {}".format(e))
+
+    def _open_secure_append(self, filepath: str):
+        """以 0600 权限创建并追加告警日志，避免敏感告警全局可读"""
+        fd = os.open(filepath, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            return io.open(fd, 'a', encoding='utf-8')
+        except Exception:
+            os.close(fd)
+            raise
 
     def _output_to_syslog(self, alert: Dict, config: Dict):
         """输出到 syslog"""

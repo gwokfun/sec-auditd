@@ -228,6 +228,43 @@ class TestDefaultEngineE2E(TestEngineE2E):
             except subprocess.TimeoutExpired:
                 proc.kill()
 
+    def test_reopens_audit_log_after_rotation(self):
+        """测试 audit.log 轮转后继续读取新文件"""
+        engine_script = ALERT_ENGINE_DIR / 'engine.py'
+
+        proc = subprocess.Popen(
+            ['python3', str(engine_script), self.config_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            time.sleep(2)
+
+            rotated_log = self.audit_log + '.1'
+            os.rename(self.audit_log, rotated_log)
+            with open(self.audit_log, 'w') as f:
+                f.write(
+                    'type=EXECVE msg=audit(1234567890.223:457): argc=2 '
+                    'a0="/tmp/rotated" exe="/tmp/rotated" key="process_exec"\n'
+                )
+
+            self._wait_for_alerts(timeout=6)
+            alerts = self._read_alerts()
+            rotated_alerts = [
+                a for a in alerts
+                if a.get('rule_id') == 'test_process_exec'
+                and '/tmp/rotated' in a.get('message', '')
+            ]
+            self.assertGreater(len(rotated_alerts), 0, "轮转后新 audit.log 的事件应生成告警")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
 
 class TestLaunchScriptE2E(TestEngineE2E):
     """测试启动脚本"""

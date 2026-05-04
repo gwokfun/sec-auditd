@@ -31,6 +31,7 @@ step() {
 AUTO_MODE=false
 MINIMAL_MODE=false
 WITH_BINARY=false
+USE_BINARY=false
 SKIP_ALERT_ENGINE=false
 START_SERVICE=true
 PYTHON_VERSION=""
@@ -119,6 +120,15 @@ detect_package_manager() {
 PKG_MANAGER=$(detect_package_manager)
 info "检测到包管理器: $PKG_MANAGER"
 
+if [ "$WITH_BINARY" = true ]; then
+    if [ -f "$REPO_DIR/dist/engine" ]; then
+        USE_BINARY=true
+        info "检测到二进制引擎，将跳过 Python 运行时依赖"
+    else
+        warn "指定了 --with-binary，但未找到 $REPO_DIR/dist/engine，将回退到 Python 脚本模式"
+    fi
+fi
+
 # 步骤 1: 安装依赖
 step "[1/8] 检查和安装依赖..."
 
@@ -149,8 +159,8 @@ else
     info "✓ auditd 已安装"
 fi
 
-# 安装 Python3
-if ! command -v python3 &> /dev/null; then
+# 安装 Python3（二进制模式不需要）
+if [ "$USE_BINARY" != true ] && ! command -v python3 &> /dev/null; then
     warn "python3 未安装，正在安装..."
     case $PKG_MANAGER in
         apt)
@@ -173,12 +183,12 @@ if ! command -v python3 &> /dev/null; then
     if command -v python3 &> /dev/null; then
         info "✓ python3 已安装"
     fi
-else
+elif [ "$USE_BINARY" != true ]; then
     info "✓ python3 已安装"
 fi
 
 # 安装 pip3
-if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
+if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$USE_BINARY" != true ]; then
     if ! command -v pip3 &> /dev/null; then
         warn "pip3 未安装，正在安装..."
         case $PKG_MANAGER in
@@ -207,20 +217,31 @@ if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
 fi
 
 # 安装 Python 依赖
-if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$WITH_BINARY" = false ]; then
+if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$USE_BINARY" != true ]; then
     info "正在安装 Python 依赖..."
+    _pip_failed=false
     if [ -f "$REPO_DIR/requirements.txt" ]; then
-        pip3 install -q -r "$REPO_DIR/requirements.txt" || {
-            warn "部分依赖安装失败，告警引擎可能无法使用"
-            SKIP_ALERT_ENGINE=true
-        }
+        pip3 install -q -r "$REPO_DIR/requirements.txt" 2>/dev/null || _pip_failed=true
     else
-        pip3 install -q "PyYAML>=5.1,<7.0" "simpleeval>=0.9.13" || {
-            warn "依赖安装失败"
-            SKIP_ALERT_ENGINE=true
-        }
+        pip3 install -q "PyYAML>=5.1,<7.0" "simpleeval>=0.9.13" 2>/dev/null || _pip_failed=true
     fi
-    info "✓ Python 依赖已安装"
+    if [ "$_pip_failed" = true ]; then
+        warn "依赖安装失败，尝试使用 --break-system-packages..."
+        if [ -f "$REPO_DIR/requirements.txt" ]; then
+            pip3 install -q --break-system-packages -r "$REPO_DIR/requirements.txt" || {
+                warn "依赖安装失败，告警引擎将无法使用"
+                SKIP_ALERT_ENGINE=true
+            }
+        else
+            pip3 install -q --break-system-packages "PyYAML>=5.1,<7.0" "simpleeval>=0.9.13" || {
+                warn "依赖安装失败，告警引擎将无法使用"
+                SKIP_ALERT_ENGINE=true
+            }
+        fi
+    fi
+    if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
+        info "✓ Python 依赖已安装"
+    fi
 fi
 
 # 步骤 2: 创建目录结构
@@ -233,8 +254,23 @@ info "✓ 目录创建完成"
 step "[3/8] 配置 auditd 规则..."
 cp -r "$REPO_DIR/audit.rules.d"/* "$INSTALL_DIR/audit.rules.d/" 2>/dev/null || true
 
-# 生成完整的 auditd 规则文件
-cat "$INSTALL_DIR/audit.rules.d"/*.rules > /etc/audit/rules.d/sec-auditd.rules
+# 生成完整的 auditd 规则文件（过滤不存在的路径）
+generate_rules() {
+    cat "$INSTALL_DIR/audit.rules.d"/*.rules | while IFS= read -r line; do
+        # 跳过空行和注释
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && echo "$line" && continue
+        # 对 -w 规则检查路径是否存在
+        if [[ "$line" =~ ^[[:space:]]*-w[[:space:]]+([^[:space:]]+) ]]; then
+            local path="${BASH_REMATCH[1]}"
+            if [ ! -e "$path" ]; then
+                echo "# SKIPPED (path not found: $path): $line"
+                continue
+            fi
+        fi
+        echo "$line"
+    done
+}
+generate_rules > /etc/audit/rules.d/sec-auditd.rules
 info "✓ 规则文件已生成: /etc/audit/rules.d/sec-auditd.rules"
 
 # 步骤 4: 配置日志轮转
@@ -265,7 +301,7 @@ cat > /etc/logrotate.d/sec-auditd <<'EOF'
     delaycompress
     missingok
     notifempty
-    create 0644 root root
+    create 0600 root root
     size 50M
     dateext
     dateformat -%Y%m%d-%s
@@ -280,7 +316,7 @@ if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
     chmod +x "$INSTALL_DIR/alert-engine/launch-engine.sh"
 
     # 选择执行方式
-    if [ "$WITH_BINARY" = true ] && [ -f "$REPO_DIR/dist/engine" ]; then
+    if [ "$USE_BINARY" = true ]; then
         info "使用二进制版本"
         cp "$REPO_DIR/dist/engine" "$INSTALL_DIR/alert-engine/"
         chmod +x "$INSTALL_DIR/alert-engine/engine"
@@ -343,28 +379,57 @@ step "[8/8] 启动服务..."
 
 # 启动 auditd
 info "启动 auditd 服务..."
-augenrules --load 2>/dev/null || auditctl -R /etc/audit/rules.d/sec-auditd.rules
+# 先删除旧规则再加载
+auditctl -D 2>/dev/null || true
+if ! augenrules --load; then
+    warn "augenrules 加载失败，尝试直接加载规则..."
+    if ! auditctl -R /etc/audit/rules.d/sec-auditd.rules; then
+        error "审计规则加载失败，请检查 /etc/audit/rules.d/sec-auditd.rules"
+        exit 1
+    fi
+fi
 systemctl enable auditd
 systemctl restart auditd
 
 # 检查规则加载情况
-RULE_COUNT=$(auditctl -l | wc -l)
+RULE_COUNT=$(auditctl -l 2>/dev/null | wc -l)
+if [ "$RULE_COUNT" -eq 0 ]; then
+    error "审计规则加载后数量为 0，安装中止"
+    exit 1
+fi
 info "✓ auditd 服务已启动，已加载 $RULE_COUNT 条审计规则"
 
 # 启动告警引擎
 if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$START_SERVICE" = true ]; then
+    # 确保引擎文件已安装（幂等）
+    if [ ! -f "$INSTALL_DIR/alert-engine/engine.py" ]; then
+        cp -r "$REPO_DIR/alert-engine"/* "$INSTALL_DIR/alert-engine/" 2>/dev/null || true
+        chmod +x "$INSTALL_DIR/alert-engine/launch-engine.sh" 2>/dev/null || true
+        systemctl daemon-reload
+    fi
+
     if [ "$AUTO_MODE" = true ]; then
         info "自动启动告警引擎..."
         systemctl enable sec-auditd-alert
-        systemctl start sec-auditd-alert
-        info "✓ 告警引擎已启动"
+        systemctl restart sec-auditd-alert
+        sleep 1
+        if systemctl is-active --quiet sec-auditd-alert; then
+            info "✓ 告警引擎已启动"
+        else
+            warn "告警引擎启动失败，请检查: journalctl -u sec-auditd-alert"
+        fi
     else
         read -p "是否现在启动告警引擎？[Y/n] " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Nn]$ ]]; then
             systemctl enable sec-auditd-alert
-            systemctl start sec-auditd-alert
-            info "✓ 告警引擎已启动"
+            systemctl restart sec-auditd-alert
+            sleep 1
+            if systemctl is-active --quiet sec-auditd-alert; then
+                info "✓ 告警引擎已启动"
+            else
+                warn "告警引擎启动失败，请检查: journalctl -u sec-auditd-alert"
+            fi
         else
             info "您可以稍后使用以下命令启动："
             echo "  systemctl start sec-auditd-alert"

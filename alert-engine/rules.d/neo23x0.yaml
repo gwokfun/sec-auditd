@@ -344,12 +344,14 @@ rules:
       key: ["network_connect_4", "network_connect_6"]
 
     whitelist:
-      - process: "curl"
-      - process: "wget"
       - process: "apt"
+        exe: "/usr/bin/apt"
       - process: "apt-get"
+        exe: "/usr/bin/apt-get"
       - process: "yum"
+        exe: "/usr/bin/yum"
       - process: "dnf"
+        exe: "/usr/bin/dnf"
 
     alert:
       message: "出站网络连接: {exe} (UID: {uid})"
