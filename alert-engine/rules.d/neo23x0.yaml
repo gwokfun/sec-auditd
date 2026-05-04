@@ -75,8 +75,11 @@ rules:
 
     whitelist:
       - process: "gdb"
+        exe: "/usr/bin/gdb"
       - process: "strace"
+        exe: "/usr/bin/strace"
       - process: "ltrace"
+        exe: "/usr/bin/ltrace"
 
     alert:
       message: "警告：ptrace 被调用: {exe} (UID: {uid}, PID: {pid})"
@@ -232,6 +235,24 @@ rules:
       message: "软件包管理配置被修改: {file} by {process} (UID: {uid})"
       throttle: 300
 
+  # Neo23x0 通用系统配置变更（低频配置类 key）
+  - id: neo23x0_system_config_change
+    name: "系统配置变更（Neo23x0）"
+    enabled: true
+    severity: medium
+
+    match:
+      key: [
+        "sysctl", "modprobe", "specialfiles", "swap", "localtime",
+        "etcpasswd", "login", "network", "firewall", "etcissue",
+        "svc_defaults", "fstab", "udev", "boot_writes", "libpath",
+        "systemwide_preloads", "mail", "process_accounting"
+      ]
+
+    alert:
+      message: "系统配置变更: {key}"
+      throttle: 300
+
   # Docker 配置变更
   - id: neo23x0_docker
     name: "Docker 配置变更"
@@ -368,6 +389,43 @@ rules:
 
     alert:
       message: "文件被删除: {syscall} by {process} (UID: {uid})"
+      throttle: 300
+
+  # 文件访问/创建/修改失败（权限拒绝）
+  - id: neo23x0_file_access_denied
+    name: "文件访问被拒绝"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "file_access"
+
+    alert:
+      message: "文件访问被拒绝: {syscall} by {process} (UID: {uid})"
+      throttle: 300
+
+  - id: neo23x0_file_creation_denied
+    name: "文件创建被拒绝"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "file_creation"
+
+    alert:
+      message: "文件创建被拒绝: {syscall} by {process} (UID: {uid})"
+      throttle: 300
+
+  - id: neo23x0_file_modification_denied
+    name: "文件修改被拒绝"
+    enabled: true
+    severity: medium
+
+    match:
+      key: "file_modification"
+
+    alert:
+      message: "文件修改被拒绝: {syscall} by {process} (UID: {uid})"
       throttle: 300
 
   # DAC 权限修改（sudo 配置键 actions）

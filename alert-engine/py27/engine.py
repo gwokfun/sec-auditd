@@ -96,18 +96,30 @@ class AuditParser(object):
             if not value:
                 return value
             # 检查是否为十六进制编码（如 2F62696E2F6C73）
-            if all(c in '0123456789ABCDEFabcdef' for c in value.replace(' ', '')):
-                if len(value) % 2 == 0 and len(value) > 4:
-                    try:
-                        decoded = value.decode('hex').decode('utf-8', errors='replace')
-                        if decoded.isprintable() or '\n' in decoded or '\t' in decoded:
-                            return decoded
-                    except (ValueError, UnicodeDecodeError) as e:
-                        logger.debug("Failed to decode hex value: {}".format(e))
+            if AuditParser._looks_like_audit_hex(value):
+                try:
+                    decoded = value.replace(' ', '').decode('hex').decode('utf-8', errors='replace')
+                    if u'\ufffd' not in decoded and AuditParser._is_printable(decoded):
+                        return decoded
+                except (ValueError, UnicodeDecodeError) as e:
+                    logger.debug("Failed to decode hex value: {}".format(e))
             return value
         except (ValueError, UnicodeDecodeError) as e:
             logger.debug("Unexpected error decoding value: {}".format(e))
             return value
+
+    @staticmethod
+    def _looks_like_audit_hex(value):
+        """判断是否像 auditd 生成的十六进制编码值，避免误解码普通字符串"""
+        compact = value.replace(' ', '')
+        if len(compact) <= 4 or len(compact) % 2 != 0:
+            return False
+        return all(c in '0123456789ABCDEFabcdef' for c in compact)
+
+    @staticmethod
+    def _is_printable(value):
+        """Python 2 compatible printable check"""
+        return all(ch in ('\n', '\t') or (ord(ch) >= 32 and ord(ch) != 127) for ch in value)
 
     @staticmethod
     def enrich_event(event):
@@ -115,10 +127,14 @@ class AuditParser(object):
         # 添加可读时间
         if 'timestamp' in event:
             try:
-                dt = datetime.fromtimestamp(event['timestamp'])
-                event['datetime'] = dt.isoformat()
+                dt = datetime.utcfromtimestamp(event['timestamp'])
+                event['datetime'] = dt.isoformat() + 'Z'
             except (ValueError, OSError, OverflowError):
                 pass
+
+        # audit PATH 记录常用 name=... 表示文件路径，规则消息统一使用 file
+        if 'file' not in event and 'name' in event:
+            event['file'] = event['name']
 
         # 提取进程信息
         if 'comm' in event:
@@ -180,6 +196,7 @@ class RuleEngine(object):
             logger.warning("Rules directory not found: {}".format(rules_dir))
             return rules
 
+        seen_rule_ids = set()
         for filename in sorted(os.listdir(rules_dir)):
             if filename.endswith('.yaml') or filename.endswith('.yml'):
                 filepath = os.path.join(rules_dir, filename)
@@ -187,7 +204,16 @@ class RuleEngine(object):
                     with open(filepath, 'r') as f:
                         rule_file = yaml.safe_load(f)
                         if rule_file and 'rules' in rule_file:
-                            rules.extend(rule_file['rules'])
+                            for rule in rule_file['rules']:
+                                rule_id = rule.get('id')
+                                if rule_id in seen_rule_ids:
+                                    logger.warning(
+                                        "Duplicate rule id '{}' in {}; skipping duplicate".format(rule_id, filename)
+                                    )
+                                    continue
+                                if rule_id:
+                                    seen_rule_ids.add(rule_id)
+                                rules.append(rule)
                             logger.info("Loaded rules from {}".format(filename))
                 except yaml.YAMLError as e:
                     logger.error("Failed to parse YAML in {}: {}".format(filename, e))
@@ -203,17 +229,34 @@ class RuleEngine(object):
         """检查并重新加载规则，同时清理过期的限流缓存"""
         now = time.time()
         if now - self.last_reload > self.reload_interval:
-            logger.info("Reloading rules...")
-            self.rules = self._load_rules()
-            self.last_reload = now
-            self._clean_alert_cache()
+            self._reload_rules(now)
 
     def reload_rules(self):
         """立即重新加载规则并清理过期限流缓存（可由信号处理器等外部触发器调用）"""
+        self._reload_rules(time.time())
+
+    def _reload_rules(self, now=None):
+        """重新加载规则，并清理已删除或不再聚合的规则状态"""
         logger.info("Reloading rules...")
         self.rules = self._load_rules()
-        self.last_reload = time.time()
+        self.last_reload = now if now is not None else time.time()
         self._clean_alert_cache()
+        self._clean_aggregate_state()
+
+    def _clean_aggregate_state(self):
+        """清理不再属于聚合规则的历史状态，避免热重载后内存持续增长"""
+        aggregate_rule_ids = set(
+            rule.get('id') for rule in self.rules
+            if rule.get('id') and 'aggregate' in rule
+        )
+        stale_rule_ids = [
+            rule_id for rule_id in self.state
+            if rule_id not in aggregate_rule_ids
+        ]
+        for rule_id in stale_rule_ids:
+            del self.state[rule_id]
+        if stale_rule_ids:
+            logger.debug("Cleaned aggregate state for removed rules: {}".format(stale_rule_ids))
 
     def _clean_alert_cache(self):
         """清理过期的限流缓存，防止内存无限增长"""
@@ -498,7 +541,32 @@ class AlertEngine(object):
         self.event_count = 0
         self.alert_count = 0
         self._running = True
+        self._pending_events = {}
+        self._syslog = None
+        self._syslog_opened = False
+        self._prepare_outputs()
         self._setup_signal_handlers()
+
+    def _prepare_outputs(self):
+        """初始化输出目标，避免每条告警重复做固定准备工作"""
+        for output in self.config.get('engine', {}).get('output', []):
+            if output.get('type') == 'file':
+                filepath = output.get('path')
+                if filepath:
+                    self._ensure_output_dir(filepath)
+            elif output.get('type') == 'syslog' and output.get('enabled', False):
+                self._ensure_syslog_open()
+
+    def _ensure_output_dir(self, filepath):
+        """确保输出目录存在"""
+        dir_name = os.path.dirname(filepath)
+        if not dir_name:
+            return
+        try:
+            if not os.path.exists(dir_name):
+                os.makedirs(dir_name)
+        except Exception as e:
+            logger.error("Failed to create alert output directory {}: {}".format(dir_name, e))
 
     def _setup_signal_handlers(self):
         """设置信号处理器"""
@@ -563,10 +631,12 @@ class AlertEngine(object):
                     self._process_line(line.strip())
                     continue
 
+                self._flush_pending_events()
+
                 latest_identity = self._file_identity(filepath)
                 if latest_identity and latest_identity != current_identity:
                     logger.info("Audit log rotated, reopening: {}".format(filepath))
-                    f.close()
+                    self._close_file(f)
                     f = None
                     current_identity = None
                     seek_to_end = False
@@ -584,6 +654,13 @@ class AlertEngine(object):
             logger.info("Alert engine stopped. Processed {} events, generated {} alerts".format(
                 self.event_count, self.alert_count))
 
+    def _close_file(self, f):
+        """Best-effort close for log rotation handling."""
+        try:
+            f.close()
+        except Exception as e:
+            logger.debug("Failed to close audit log file: {}".format(e))
+
     def _file_identity(self, filepath):
         """返回文件身份，用于检测 logrotate 后的 inode 变化"""
         try:
@@ -600,21 +677,65 @@ class AlertEngine(object):
             if not event:
                 return
 
-            self.event_count += 1
+            self._flush_pending_events(event.get('serial'))
 
-            # 丰富事件
-            event = self.parser.enrich_event(event)
+            event_type = event.get('type')
+            serial = event.get('serial')
+            if event_type == 'PATH':
+                if serial in self._pending_events:
+                    # 原地合并，不 pop —— 同一 serial 可能有多条 PATH 记录
+                    self._pending_events[serial] = self._merge_path_event(
+                        self._pending_events[serial], event)
+                return  # PATH 记录从不直接触发处理
+            elif event_type == 'EOE':
+                # End-of-Event：该 serial 所有记录已全部输出，立即刷新
+                if serial in self._pending_events:
+                    self._handle_event(self._pending_events.pop(serial))
+                return
+            elif event_type == 'SYSCALL' and serial and event.get('key'):
+                self._pending_events[serial] = event
+                return
 
-            # 应用规则
-            alerts = self.rule_engine.process_event(event)
-
-            # 输出告警
-            for alert in alerts:
-                self._output_alert(alert)
-                self.alert_count += 1
+            self._handle_event(event)
 
         except Exception as e:
             logger.error("Error processing line: {}, line: {}".format(e, line[:200]))
+
+    def _flush_pending_events(self, current_serial=None):
+        """处理已等待 PATH 记录但可以安全刷出的 SYSCALL 事件"""
+        flush_serials = [
+            serial for serial in self._pending_events
+            if current_serial is None or serial != current_serial
+        ]
+        for serial in flush_serials:
+            event = self._pending_events.pop(serial)
+            self._handle_event(event)
+
+    def _merge_path_event(self, event, path_event):
+        """把同 serial 的 PATH 记录合并到 SYSCALL 事件中；支持多条 PATH 记录累积"""
+        for key, value in path_event.items():
+            if key in ['type', 'timestamp', 'serial']:
+                continue
+            if key not in event:
+                event[key] = value
+        if 'name' in path_event:
+            event['file'] = path_event['name']
+        return event
+
+    def _handle_event(self, event):
+        """丰富、匹配并输出单个完整 audit 事件"""
+        self.event_count += 1
+
+        # 丰富事件
+        event = self.parser.enrich_event(event)
+
+        # 应用规则
+        alerts = self.rule_engine.process_event(event)
+
+        # 输出告警
+        for alert in alerts:
+            self._output_alert(alert)
+            self.alert_count += 1
 
     def _output_alert(self, alert):
         """输出告警"""
@@ -635,12 +756,6 @@ class AlertEngine(object):
         """输出到文件"""
         filepath = config['path']
         format_type = config.get('format', 'json')
-
-        # 确保目录存在（filepath 可能是纯文件名，此时 dirname 为空）
-        dir_name = os.path.dirname(filepath)
-        if dir_name:
-            if not os.path.exists(dir_name):
-                os.makedirs(dir_name)
 
         try:
             with self._open_secure_append(filepath) as f:
@@ -667,13 +782,27 @@ class AlertEngine(object):
     def _output_to_syslog(self, alert, config):
         """输出到 syslog"""
         try:
-            import syslog
-            syslog.openlog('sec-auditd')
-            syslog.syslog(syslog.LOG_WARNING, json.dumps(alert, ensure_ascii=False))
+            if not self._ensure_syslog_open():
+                return
+            self._syslog.syslog(self._syslog.LOG_WARNING, json.dumps(alert, ensure_ascii=False))
         except ImportError:
             logger.error("syslog module not available")
         except Exception as e:
             logger.error("Failed to send to syslog: {}".format(e))
+
+    def _ensure_syslog_open(self):
+        """按需初始化 syslog，一次 openlog 后复用"""
+        if self._syslog_opened:
+            return True
+        try:
+            import syslog
+            syslog.openlog('sec-auditd')
+            self._syslog = syslog
+            self._syslog_opened = True
+            return True
+        except ImportError:
+            logger.error("syslog module not available")
+            return False
 
 
 def main():

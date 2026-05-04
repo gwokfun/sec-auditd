@@ -88,6 +88,7 @@ done
 
 INSTALL_DIR="/etc/sec-auditd"
 LOG_DIR="/var/log/sec-auditd"
+VENV_DIR="$INSTALL_DIR/venv"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "======================================"
@@ -187,68 +188,77 @@ elif [ "$USE_BINARY" != true ]; then
     info "✓ python3 已安装"
 fi
 
-# 安装 pip3
-if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$USE_BINARY" != true ]; then
-    if ! command -v pip3 &> /dev/null; then
-        warn "pip3 未安装，正在安装..."
-        case $PKG_MANAGER in
-            apt)
-                apt-get install -y python3-pip
-                ;;
-            yum|dnf)
-                python3 -m ensurepip --default-pip || yum install -y python3-pip
-                ;;
-            zypper)
-                zypper install -y python3-pip
-                ;;
-            *)
-                python3 -m ensurepip --default-pip 2>/dev/null || {
-                    warn "pip3 安装失败"
-                    SKIP_ALERT_ENGINE=true
-                }
-                ;;
-        esac
-        if command -v pip3 &> /dev/null; then
-            info "✓ pip3 已安装"
-        fi
-    else
-        info "✓ pip3 已安装"
-    fi
-fi
-
-# 安装 Python 依赖
-if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$USE_BINARY" != true ]; then
-    info "正在安装 Python 依赖..."
-    _pip_failed=false
-    if [ -f "$REPO_DIR/requirements.txt" ]; then
-        pip3 install -q -r "$REPO_DIR/requirements.txt" 2>/dev/null || _pip_failed=true
-    else
-        pip3 install -q "PyYAML>=5.1,<7.0" "simpleeval>=0.9.13" 2>/dev/null || _pip_failed=true
-    fi
-    if [ "$_pip_failed" = true ]; then
-        warn "依赖安装失败，尝试使用 --break-system-packages..."
-        if [ -f "$REPO_DIR/requirements.txt" ]; then
-            pip3 install -q --break-system-packages -r "$REPO_DIR/requirements.txt" || {
-                warn "依赖安装失败，告警引擎将无法使用"
-                SKIP_ALERT_ENGINE=true
-            }
-        else
-            pip3 install -q --break-system-packages "PyYAML>=5.1,<7.0" "simpleeval>=0.9.13" || {
-                warn "依赖安装失败，告警引擎将无法使用"
-                SKIP_ALERT_ENGINE=true
-            }
-        fi
-    fi
-    if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
-        info "✓ Python 依赖已安装"
-    fi
-fi
-
 # 步骤 2: 创建目录结构
 step "[2/8] 创建目录结构..."
 mkdir -p "$INSTALL_DIR"/{audit.rules.d,alert-engine/rules.d,scripts}
 mkdir -p "$LOG_DIR"
 info "✓ 目录创建完成"
+
+install_venv_support() {
+    case $PKG_MANAGER in
+        apt)
+            apt-get install -y python3-venv
+            ;;
+        yum)
+            yum install -y python3-virtualenv python3-pip
+            ;;
+        dnf)
+            dnf install -y python3-virtualenv python3-pip
+            ;;
+        zypper)
+            zypper install -y python3-virtualenv python3-pip
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+create_python_venv() {
+    local python_cmd="$1"
+    rm -rf "$VENV_DIR"
+    "$python_cmd" -m venv "$VENV_DIR" 2>/dev/null || {
+        warn "创建 Python venv 失败，尝试安装 venv 支持包..."
+        install_venv_support || return 1
+        "$python_cmd" -m venv "$VENV_DIR"
+    }
+    "$VENV_DIR/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
+    "$VENV_DIR/bin/python" -m pip install -q --upgrade pip
+}
+
+# 安装 Python 依赖到隔离 venv，避免修改系统 Python 包
+if [ "$SKIP_ALERT_ENGINE" != "true" ] && [ "$USE_BINARY" != true ]; then
+    info "正在创建 Python 虚拟环境并安装依赖..."
+
+    VENV_PYTHON="python3"
+    case "$PYTHON_VERSION" in
+        "3.5"|"35")
+            command -v python3.5 >/dev/null 2>&1 && VENV_PYTHON="python3.5"
+            ;;
+        "3.6"|"36")
+            command -v python3.6 >/dev/null 2>&1 && VENV_PYTHON="python3.6"
+            ;;
+        "2.7"|"27")
+            warn "Python 2.7 模式不支持 venv 安装；请预先安装 PyYAML 和 simpleeval"
+            ;;
+    esac
+
+    if [ "$PYTHON_VERSION" = "2.7" ] || [ "$PYTHON_VERSION" = "27" ]; then
+        info "✓ 跳过 venv 创建（Python 2.7 模式）"
+    elif create_python_venv "$VENV_PYTHON"; then
+        if [ -f "$REPO_DIR/requirements.txt" ]; then
+            "$VENV_DIR/bin/python" -m pip install -q -r "$REPO_DIR/requirements.txt" || SKIP_ALERT_ENGINE=true
+        else
+            "$VENV_DIR/bin/python" -m pip install -q "PyYAML>=5.1,<7.0" "simpleeval>=0.9.13" || SKIP_ALERT_ENGINE=true
+        fi
+        if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
+            info "✓ Python 依赖已安装到 $VENV_DIR"
+        fi
+    else
+        warn "创建 Python 虚拟环境失败，告警引擎将无法使用"
+        SKIP_ALERT_ENGINE=true
+    fi
+fi
 
 # 步骤 3: 复制 auditd 规则配置
 step "[3/8] 配置 auditd 规则..."
@@ -321,6 +331,14 @@ if [ "$SKIP_ALERT_ENGINE" != "true" ]; then
         cp "$REPO_DIR/dist/engine" "$INSTALL_DIR/alert-engine/"
         chmod +x "$INSTALL_DIR/alert-engine/engine"
         EXEC_CMD="$INSTALL_DIR/alert-engine/engine"
+    elif [ -z "$PYTHON_VERSION" ]; then
+        EXEC_CMD="$VENV_DIR/bin/python $INSTALL_DIR/alert-engine/engine.py"
+    elif [ "$PYTHON_VERSION" = "3.5" ] || [ "$PYTHON_VERSION" = "35" ]; then
+        info "配置使用 Python 3.5 兼容引擎"
+        EXEC_CMD="$VENV_DIR/bin/python $INSTALL_DIR/alert-engine/py35/engine.py"
+    elif [ "$PYTHON_VERSION" = "3.6" ] || [ "$PYTHON_VERSION" = "36" ]; then
+        info "配置使用 Python 3.6 兼容引擎"
+        EXEC_CMD="$VENV_DIR/bin/python $INSTALL_DIR/alert-engine/py36/engine.py"
     else
         # 使用 launch-engine.sh 脚本启动，支持 Python 版本选择
         if [ -n "$PYTHON_VERSION" ]; then

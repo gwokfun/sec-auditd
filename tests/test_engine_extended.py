@@ -10,6 +10,7 @@ import os
 import stat
 import tempfile
 import time
+import types
 from unittest.mock import patch
 
 # Add parent directory to path
@@ -79,6 +80,17 @@ class TestAuditParserExtended(unittest.TestCase):
         result = AuditParser.decode_audit_value(non_printable_hex)
         # 非打印字符不应被解码，应返回原始十六进制字符串
         self.assertEqual(result, non_printable_hex)
+
+    def test_decode_audit_value_lowercase_plain_text(self):
+        """测试类似十六进制的普通小写文本不被误解码"""
+        plain = "cafe1234abcd"
+        result = AuditParser.decode_audit_value(plain)
+        self.assertEqual(result, plain)
+
+    def test_decode_audit_value_numeric_hex_text(self):
+        """测试不含 A-F 的合法 audit 十六进制文本可以解码"""
+        result = AuditParser.decode_audit_value("62617368")
+        self.assertEqual(result, "bash")
 
     def test_enrich_event_invalid_timestamp(self):
         """测试无效时间戳的事件丰富"""
@@ -218,6 +230,52 @@ engine:
         # Load the config file, should handle missing rules directory gracefully
         RuleEngine(self.config_file)
         # 应该跳过无效规则
+
+    def test_load_rules_skips_duplicate_ids(self):
+        """测试重复规则 ID 会被跳过，避免状态和限流冲突"""
+        first_rule = os.path.join(self.rules_dir, '01-first.yaml')
+        second_rule = os.path.join(self.rules_dir, '02-second.yaml')
+        with open(first_rule, 'w') as f:
+            f.write("""
+rules:
+  - id: duplicate_rule
+    name: "第一条"
+    match:
+      key: "first"
+    alert:
+      message: "first"
+""")
+        with open(second_rule, 'w') as f:
+            f.write("""
+rules:
+  - id: duplicate_rule
+    name: "第二条"
+    match:
+      key: "second"
+    alert:
+      message: "second"
+""")
+
+        config_content = f"""
+engine:
+  input:
+    type: file
+    file: /tmp/test.log
+  output:
+    - type: file
+      path: /tmp/alert.log
+  rules:
+    dir: {self.rules_dir}
+    reload_interval: 60
+"""
+        with open(self.config_file, 'w') as f:
+            f.write(config_content)
+
+        engine = RuleEngine(self.config_file)
+        duplicate_rules = [r for r in engine.rules if r.get('id') == 'duplicate_rule']
+
+        self.assertEqual(len(duplicate_rules), 1)
+        self.assertEqual(duplicate_rules[0]['name'], '第一条')
 
     def test_match_rule_with_list_keys(self):
         """测试匹配多个 key 的规则"""
@@ -549,6 +607,38 @@ rules:
         # 规则应该重新加载
         self.assertEqual(len(engine.rules), initial_count)
 
+    def test_reload_rules_cleans_removed_aggregate_state(self):
+        """测试规则热重载后清理已删除聚合规则状态"""
+        rule_content = """
+rules:
+  - id: aggregate_removed
+    name: "聚合清理测试"
+    enabled: true
+    severity: high
+    match:
+      key: "aggregate_key"
+    aggregate:
+      window: 60
+      group_by: ["uid"]
+      count: 2
+    alert:
+      message: "测试"
+      throttle: 0
+"""
+        rule_file = os.path.join(self.rules_dir, 'aggregate_cleanup.yaml')
+        with open(rule_file, 'w') as f:
+            f.write(rule_content)
+
+        engine = RuleEngine(self.config_file)
+        aggregate_rule = [r for r in engine.rules if r['id'] == 'aggregate_removed'][0]
+        engine._check_aggregate({'key': 'aggregate_key', 'uid': 1000}, aggregate_rule)
+        self.assertIn('aggregate_removed', engine.state)
+
+        os.remove(rule_file)
+        engine.reload_rules()
+
+        self.assertNotIn('aggregate_removed', engine.state)
+
     def tearDown(self):
         """清理测试环境"""
         import shutil
@@ -600,6 +690,66 @@ engine:
         engine._process_line(line)
         self.assertEqual(engine.event_count, 1)
 
+    def test_process_line_merges_path_record_by_serial(self):
+        """测试同 serial 的 SYSCALL/PATH 行会合并后再匹配文件过滤规则"""
+        rule_content = """
+rules:
+  - id: sshd_config_change
+    name: "SSH 配置变更"
+    enabled: true
+    severity: high
+    match:
+      key: "sshd"
+      filters:
+        - "'sshd_config' in file"
+    alert:
+      message: "SSH 配置被修改: {file}"
+      throttle: 0
+"""
+        with open(os.path.join(self.rules_dir, 'file.yaml'), 'w') as f:
+            f.write(rule_content)
+
+        engine = AlertEngine(self.config_file)
+        syscall_line = (
+            'type=SYSCALL msg=audit(1234567890.123:456): '
+            'arch=c000003e syscall=2 success=yes comm="touch" '
+            'key="sshd"'
+        )
+        path_line = (
+            'type=PATH msg=audit(1234567890.123:456): '
+            'item=0 name="/etc/ssh/sshd_config" inode=123'
+        )
+
+        eoe_line = 'type=EOE msg=audit(1234567890.123:456):'
+
+        engine._process_line(syscall_line)
+        self.assertEqual(engine.event_count, 0)
+        engine._process_line(path_line)
+        # PATH 记录应原地合并，等待 EOE 才触发处理（真实 auditd 行为）
+        self.assertEqual(engine.event_count, 0)
+        engine._process_line(eoe_line)
+
+        self.assertEqual(engine.event_count, 1)
+        self.assertEqual(engine.alert_count, 1)
+        with open(self.alert_log, 'r') as f:
+            self.assertIn('/etc/ssh/sshd_config', f.read())
+
+    def test_process_line_flushes_pending_syscall_on_new_serial(self):
+        """测试无 PATH 的 SYSCALL 在下一条 serial 到来时会刷出处理"""
+        engine = AlertEngine(self.config_file)
+        syscall_line = (
+            'type=SYSCALL msg=audit(1234567890.123:456): '
+            'arch=c000003e syscall=90 success=yes comm="chmod" '
+            'key="perm_mod"'
+        )
+        next_line = 'type=EXECVE msg=audit(1234567890.124:457): argc=1 a0="ls" key="test"'
+
+        engine._process_line(syscall_line)
+        self.assertEqual(engine.event_count, 0)
+        engine._process_line(next_line)
+
+        self.assertEqual(engine.event_count, 2)
+
     def test_process_line_invalid(self):
         """测试处理无效行"""
         engine = AlertEngine(self.config_file)
@@ -639,6 +789,24 @@ engine:
         with open(self.alert_log, 'r') as f:
             content = f.read()
             self.assertIn('test', content)
+
+    def test_output_alert_does_not_create_directory_each_time(self):
+        """测试输出目录在初始化时准备，写告警时不重复 makedirs"""
+        engine = AlertEngine(self.config_file)
+        alert = {
+            'timestamp': '2024-01-01T00:00:00Z',
+            'rule_id': 'test',
+            'rule_name': 'Test Rule',
+            'severity': 'high',
+            'message': 'Test alert',
+            'event': {'key': 'test'}
+        }
+
+        with patch('engine.os.makedirs') as makedirs_mock:
+            engine._output_alert(alert)
+            engine._output_alert(alert)
+
+        makedirs_mock.assert_not_called()
 
     def test_output_alert_to_file_exception(self):
         """测试输出告警时的文件异常"""
@@ -685,6 +853,53 @@ engine:
 
         # 不应该引发异常
         engine._output_alert(alert)
+
+    def test_output_alert_syslog_openlog_once(self):
+        """测试 syslog openlog 仅初始化一次"""
+        syslog_config = f"""
+engine:
+  input:
+    type: file
+    file: /tmp/test.log
+  output:
+    - type: syslog
+      enabled: true
+  rules:
+    dir: {self.rules_dir}
+    reload_interval: 60
+"""
+        syslog_config_file = os.path.join(self.temp_dir, 'syslog.yaml')
+        with open(syslog_config_file, 'w') as f:
+            f.write(syslog_config)
+
+        calls = {'openlog': 0, 'syslog': 0}
+
+        def fake_openlog(name):
+            calls['openlog'] += 1
+
+        def fake_syslog(severity, message):
+            calls['syslog'] += 1
+
+        fake_module = types.SimpleNamespace(
+            LOG_WARNING=4,
+            openlog=fake_openlog,
+            syslog=fake_syslog
+        )
+        alert = {
+            'timestamp': '2024-01-01T00:00:00Z',
+            'rule_id': 'test',
+            'severity': 'high',
+            'message': 'Test',
+            'event': {}
+        }
+
+        with patch.dict(sys.modules, {'syslog': fake_module}):
+            engine = AlertEngine(syslog_config_file)
+            engine._output_alert(alert)
+            engine._output_alert(alert)
+
+        self.assertEqual(calls['openlog'], 1)
+        self.assertEqual(calls['syslog'], 2)
 
     def test_run_file_mode_not_exists(self):
         """测试文件模式 - 文件不存在"""

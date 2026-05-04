@@ -46,7 +46,9 @@ rules:
     severity: high
 
     match:
-      key: "sshd_config"
+      key: "sshd"
+      filters:
+        - "'sshd_config' in file"
 
     alert:
       message: "SSH 配置被修改 by {process} (UID: {uid})"
@@ -59,7 +61,7 @@ rules:
     severity: critical
 
     match:
-      key: "root_ssh_keys"
+      key: "rootkey"
 
     alert:
       message: "警告：Root SSH 密钥被修改: {file} by {process} (UID: {uid})"
@@ -72,7 +74,7 @@ rules:
     severity: critical
 
     match:
-      key: "sudoers_changes"
+      key: "actions"
 
     alert:
       message: "警告：Sudoers 配置被修改: {file} by {process} (UID: {uid})"
@@ -85,7 +87,7 @@ rules:
     severity: medium
 
     match:
-      key: "systemd_changes"
+      key: ["systemd_changes", "systemd"]
 
     alert:
       message: "Systemd 配置被修改: {file} by {process} (UID: {uid})"
@@ -98,7 +100,7 @@ rules:
     severity: high
 
     match:
-      key: "cron_changes"
+      key: ["cron_changes", "cron"]
 
     alert:
       message: "定时任务被修改: {file} by {process} (UID: {uid})"
@@ -111,7 +113,7 @@ rules:
     severity: high
 
     match:
-      key: "pam_changes"
+      key: ["pam_changes", "pam"]
 
     alert:
       message: "PAM 配置被修改: {file} by {process} (UID: {uid})"
@@ -120,7 +122,7 @@ rules:
   # 检测系统库变更
   - id: system_lib_change
     name: "系统库文件变更"
-    enabled: true
+    enabled: false  # 默认关闭：递归监控 /lib、/usr/lib 事件量过大
     severity: critical
 
     match:
@@ -133,7 +135,7 @@ rules:
   # 检测系统二进制文件变更
   - id: system_bin_change
     name: "系统二进制文件变更"
-    enabled: true
+    enabled: false  # 默认关闭：递归监控 /bin、/usr/bin 事件量过大
     severity: critical
 
     match:
@@ -150,7 +152,7 @@ rules:
     severity: critical
 
     match:
-      key: "audit_config"
+      key: ["audit_config", "auditconfig"]
 
     alert:
       message: "警告：审计配置被修改: {file} by {process} (UID: {uid})"
@@ -189,7 +191,9 @@ rules:
     severity: medium
 
     match:
-      key: "ssh_config"
+      key: "sshd"
+      filters:
+        - "'ssh_config' in file"
 
     alert:
       message: "SSH 客户端配置被修改 by {process} (UID: {uid})"
@@ -202,7 +206,7 @@ rules:
     severity: high
 
     match:
-      key: "init_changes"
+      key: ["init_changes", "init"]
 
     alert:
       message: "Init 启动脚本被修改: {file} by {process} (UID: {uid})"
@@ -228,7 +232,7 @@ rules:
     severity: high
 
     match:
-      key: ["profile_changes", "bashrc_changes", "bash_bashrc_changes", "environment_changes"]
+      key: ["profile_changes", "bash_bashrc_changes", "environment_changes", "shell_profiles"]
 
     alert:
       message: "警告：Shell 环境配置被修改: {file} by {process} (UID: {uid})"
@@ -241,7 +245,9 @@ rules:
     severity: high
 
     match:
-      key: "selinux_changes"
+      key: "mac_policy"
+      filters:
+        - "'/etc/selinux' in file"
 
     alert:
       message: "SELinux 配置被修改: {file} by {process} (UID: {uid})"
@@ -254,7 +260,9 @@ rules:
     severity: high
 
     match:
-      key: "apparmor_changes"
+      key: "mac_policy"
+      filters:
+        - "'/etc/apparmor' in file"
 
     alert:
       message: "AppArmor 配置被修改: {file} by {process} (UID: {uid})"
@@ -293,7 +301,7 @@ rules:
     severity: critical
 
     match:
-      key: "audit_log"
+      key: ["audit_log", "auditlog"]
 
     alert:
       message: "警告：审计日志目录被修改 by {process} (UID: {uid})"

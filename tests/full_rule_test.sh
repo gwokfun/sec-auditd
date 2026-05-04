@@ -15,11 +15,51 @@ BOLD='\033[1m'
 ALERT_LOG="/var/log/sec-auditd/alert.log"
 JOURNAL_TAG="sec-auditd-alert"
 WAIT=5  # 等待引擎处理（秒）
+ALLOW_SYSTEM_CHANGES=false
 
 TOTAL=0
 PASSED=0
 FAILED=0
 SKIPPED=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --allow-system-changes)
+            ALLOW_SYSTEM_CHANGES=true
+            shift
+            ;;
+        --help|-h)
+            cat <<'EOF'
+用法: sudo ./tests/full_rule_test.sh --allow-system-changes
+
+该脚本会触发真实 auditd 规则，可能修改 /etc/passwd、/etc/sudoers
+等系统文件的 mtime。仅应在一次性测试机、容器或快照环境中运行。
+EOF
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}未知参数: $1${NC}" >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [ "$ALLOW_SYSTEM_CHANGES" != true ]; then
+    echo -e "${RED}拒绝运行：full_rule_test.sh 会修改真实系统文件的 mtime。${NC}" >&2
+    echo "请仅在测试机/容器/快照环境中使用：sudo $0 --allow-system-changes" >&2
+    exit 2
+fi
+
+run_trigger_action() {
+    local cmd="$1"
+    # SECURITY: 触发命令只能来自本脚本内的固定字符串字面量，禁止传入外部输入。
+    # 纵深防御：拦截包含变量展开 ${...} 或命令替换 $(...)/`...` 的动态字符串。
+    if [[ "$cmd" =~ \$\{[^}]+\} ]] || [[ "$cmd" =~ \$\([^)]+\) ]] || [[ "$cmd" =~ \`[^\`]+\` ]]; then
+        echo "run_trigger_action: blocked dynamic pattern in command" >&2
+        return 1
+    fi
+    bash -c "$cmd" 2>/dev/null || true
+}
 
 # 清理之前的告警
 cleanup_alerts() {
@@ -40,7 +80,7 @@ check_alert() {
 
     # 执行触发动作
     for cmd in "$@"; do
-        eval "$cmd" 2>/dev/null || true
+        run_trigger_action "$cmd"
     done
 
     sleep "$WAIT"
@@ -77,7 +117,7 @@ check_alert_throttled() {
     echo -e "    规则ID: ${rule_id}"
 
     for cmd in "$@"; do
-        eval "$cmd" 2>/dev/null || true
+        run_trigger_action "$cmd"
     done
 
     sleep "$WAIT"
@@ -200,12 +240,18 @@ check_alert "pam_change" "PAM 配置变更 (HIGH)" \
     "sudo touch /etc/pam.d/su"
 
 # 18. system_lib_change
-check_alert "system_lib_change" "系统库文件变更 (CRITICAL)" \
-    "sudo touch /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null || sudo touch /usr/lib/x86_64-linux-gnu/libc.so.6"
+TOTAL=$((TOTAL + 1))
+echo -e "\n${CYAN}[$TOTAL] 测试: 系统库文件变更 (CRITICAL)${NC}"
+echo -e "    规则ID: system_lib_change"
+echo -e "    ${YELLOW}SKIP${NC} - 默认关闭高事件量系统库递归监控"
+SKIPPED=$((SKIPPED + 1))
 
 # 19. system_bin_change
-check_alert "system_bin_change" "系统二进制文件变更 (CRITICAL)" \
-    "sudo touch /bin/ls"
+TOTAL=$((TOTAL + 1))
+echo -e "\n${CYAN}[$TOTAL] 测试: 系统二进制文件变更 (CRITICAL)${NC}"
+echo -e "    规则ID: system_bin_change"
+echo -e "    ${YELLOW}SKIP${NC} - 默认关闭高事件量系统二进制目录递归监控"
+SKIPPED=$((SKIPPED + 1))
 
 # 20. audit_config_change
 check_alert "audit_config_change" "审计配置变更 (CRITICAL)" \
