@@ -52,7 +52,12 @@ fi
 
 run_trigger_action() {
     local cmd="$1"
-    # 触发命令只能来自本脚本内的固定字符串；不要把外部输入传给这里。
+    # SECURITY: 触发命令只能来自本脚本内的固定字符串字面量，禁止传入外部输入。
+    # 纵深防御：拦截包含变量展开 ${...} 或命令替换 $(...)/`...` 的动态字符串。
+    if [[ "$cmd" =~ \$\{[^}]+\} ]] || [[ "$cmd" =~ \$\([^)]+\) ]] || [[ "$cmd" =~ \`[^\`]+\` ]]; then
+        echo "run_trigger_action: blocked dynamic pattern in command" >&2
+        return 1
+    fi
     bash -c "$cmd" 2>/dev/null || true
 }
 

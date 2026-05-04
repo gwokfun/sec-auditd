@@ -720,9 +720,14 @@ rules:
             'item=0 name="/etc/ssh/sshd_config" inode=123'
         )
 
+        eoe_line = 'type=EOE msg=audit(1234567890.123:456):'
+
         engine._process_line(syscall_line)
         self.assertEqual(engine.event_count, 0)
         engine._process_line(path_line)
+        # PATH 记录应原地合并，等待 EOE 才触发处理（真实 auditd 行为）
+        self.assertEqual(engine.event_count, 0)
+        engine._process_line(eoe_line)
 
         self.assertEqual(engine.event_count, 1)
         self.assertEqual(engine.alert_count, 1)

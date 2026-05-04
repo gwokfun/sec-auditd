@@ -683,9 +683,15 @@ class AlertEngine(object):
             serial = event.get('serial')
             if event_type == 'PATH':
                 if serial in self._pending_events:
-                    event = self._merge_path_event(self._pending_events.pop(serial), event)
-                else:
-                    return
+                    # 原地合并，不 pop —— 同一 serial 可能有多条 PATH 记录
+                    self._pending_events[serial] = self._merge_path_event(
+                        self._pending_events[serial], event)
+                return  # PATH 记录从不直接触发处理
+            elif event_type == 'EOE':
+                # End-of-Event：该 serial 所有记录已全部输出，立即刷新
+                if serial in self._pending_events:
+                    self._handle_event(self._pending_events.pop(serial))
+                return
             elif event_type == 'SYSCALL' and serial and event.get('key'):
                 self._pending_events[serial] = event
                 return
@@ -706,7 +712,7 @@ class AlertEngine(object):
             self._handle_event(event)
 
     def _merge_path_event(self, event, path_event):
-        """把同 serial 的 PATH 记录补充到原始 SYSCALL 事件中"""
+        """把同 serial 的 PATH 记录合并到 SYSCALL 事件中；支持多条 PATH 记录累积"""
         for key, value in path_event.items():
             if key in ['type', 'timestamp', 'serial']:
                 continue
