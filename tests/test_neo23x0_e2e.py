@@ -632,6 +632,24 @@ engine:
                     engine._match_rule(event_no_match, perm_mod_rule),
                     "process_exec 事件不应匹配 perm_mod 规则"
                 )
+
+                tracing_rule = None
+                for rule in engine.rules:
+                    if rule['id'] == 'neo23x0_tracing':
+                        tracing_rule = rule
+                        break
+
+                self.assertIsNotNone(tracing_rule, "应找到 tracing 规则")
+                legit_gdb = {'key': 'tracing', 'process': 'gdb',
+                             'exe': '/usr/bin/gdb'}
+                renamed_strace = {'key': 'tracing', 'process': 'strace',
+                                  'exe': '/tmp/strace'}
+
+                self.assertTrue(engine._in_whitelist(legit_gdb, tracing_rule))
+                self.assertFalse(
+                    engine._in_whitelist(renamed_strace, tracing_rule),
+                    "重命名为 strace 的非系统路径程序不应进入 ptrace 白名单"
+                )
             finally:
                 shutil.rmtree(temp_dir)
         finally:

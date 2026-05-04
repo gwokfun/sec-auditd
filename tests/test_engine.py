@@ -62,9 +62,18 @@ class TestAuditParser(unittest.TestCase):
         enriched = AuditParser.enrich_event(event)
 
         self.assertIn('datetime', enriched)
+        self.assertEqual(enriched['datetime'], '2009-02-13T23:31:30Z')
         self.assertEqual(enriched['uid'], 1000)
         self.assertEqual(enriched['pid'], 12345)
         self.assertEqual(enriched['process'], 'bash')
+
+    def test_enrich_event_sets_file_from_audit_name(self):
+        """测试从 audit PATH name 字段补充 file 字段"""
+        event = {'name': '/etc/ssh/sshd_config'}
+
+        enriched = AuditParser.enrich_event(event)
+
+        self.assertEqual(enriched['file'], '/etc/ssh/sshd_config')
 
 
 class TestRuleEngine(unittest.TestCase):

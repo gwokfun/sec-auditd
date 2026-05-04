@@ -112,7 +112,7 @@ rules:
       count: 50  # 超过50次执行
 
     match:
-      key: "process_exec"
+      key: "process_creation"
 
     alert:
       message: "UID {uid} 在60秒内执行了 {count} 次进程"
@@ -125,7 +125,7 @@ rules:
     severity: high
 
     match:
-      key: "kernel_modules"
+      key: "modules"
 
     alert:
       message: "内核模块操作: {syscall} by {process} (UID: {uid})"

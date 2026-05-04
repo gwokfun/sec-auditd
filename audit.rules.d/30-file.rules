@@ -39,17 +39,18 @@
 -w /etc/pam.d/ -p wa -k pam_changes
 -w /etc/security/limits.conf -p wa -k security_limits
 
-# 系统库
--w /lib -p wa -k system_lib_changes
--w /lib64 -p wa -k system_lib_changes
--w /usr/lib -p wa -k system_lib_changes
--w /usr/lib64 -p wa -k system_lib_changes
+# 系统库和核心二进制目录递归监控事件量很大，默认关闭。
+# 如需高敏感基线监控，可在本地按需启用以下规则，并同步启用对应告警规则。
+# -w /lib -p wa -k system_lib_changes
+# -w /lib64 -p wa -k system_lib_changes
+# -w /usr/lib -p wa -k system_lib_changes
+# -w /usr/lib64 -p wa -k system_lib_changes
+# -w /bin -p wa -k bin_changes
+# -w /sbin -p wa -k sbin_changes
+# -w /usr/bin -p wa -k usr_bin_changes
+# -w /usr/sbin -p wa -k usr_sbin_changes
 
-# 重要二进制文件
--w /bin -p wa -k bin_changes
--w /sbin -p wa -k sbin_changes
--w /usr/bin -p wa -k usr_bin_changes
--w /usr/sbin -p wa -k usr_sbin_changes
+# 本地二进制目录变更（通常事件量较小，保留默认监控）
 -w /usr/local/bin -p wa -k local_bin_changes
 -w /usr/local/sbin -p wa -k local_sbin_changes
 
